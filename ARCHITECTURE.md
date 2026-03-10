@@ -1,8 +1,8 @@
-# GameForge — Multi-Agent Game Content Generation System
+# GameForge — Multi-Agent Game Content Generation Framework
 
 **Status:** Phase 1 Architecture Design (Pending Review)
-**Last Updated:** 2026-03-08
-**Author:** HU Dev Agent
+**Last Updated:** 2026-03-10
+**Author:** Friday
 **Portfolio Target:** DeepMind Application
 
 ---
@@ -10,103 +10,77 @@
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [HU Game Model](#hu-game-model)
+2. [Design Philosophy](#design-philosophy)
 3. [System Architecture](#system-architecture)
-4. [Directory Structure](#directory-structure)
+4. [Game Adapter Interface](#game-adapter-interface)
 5. [Agent Interfaces](#agent-interfaces)
 6. [Message & Data Formats](#message--data-formats)
 7. [Agent Interaction Protocol](#agent-interaction-protocol)
-8. [Tool Inventory](#tool-inventory)
-9. [Evaluation Metrics](#evaluation-metrics)
-10. [Boundaries (What GameForge Doesn't Own)](#boundaries)
-11. [Open Questions for Review](#open-questions-for-review)
+8. [Evaluation Framework](#evaluation-framework)
+9. [Directory Structure](#directory-structure)
+10. [Tool Inventory](#tool-inventory)
+11. [Example: HU Adapter](#example-hu-adapter)
+12. [Open Questions for Review](#open-questions-for-review)
 
 ---
 
 ## Overview
 
-**GameForge** is a multi-agent system that collaborates to automatically generate, stress-test, and balance content for HU — a roguelike mahjong deck-builder. Four specialized AI agents form a pipeline: one designs candidate content, one simulates thousands of game runs, one analyzes balance health, and one evaluates creative diversity.
+**GameForge** is a game-agnostic multi-agent framework for automated content generation, simulation-driven testing, and balance optimization. Four specialized AI agents form an iterative pipeline:
 
-The system is designed around clean agent boundaries, typed JSON message contracts, and a shared state store — making each agent independently testable, observable, and replaceable.
+1. **Designer** — proposes new content configurations using LLM reasoning
+2. **Simulator** — stress-tests proposals by running thousands of game episodes
+3. **Balancer** — statistically analyzes simulation results to detect balance issues
+4. **Critic** — evaluates meta-health (diversity, fun, novelty) and decides accept/reject
+
+The framework is **game-agnostic**: it defines abstract interfaces for game rules, content schemas, and evaluation metrics. Concrete games plug in via a `GameAdapter` — a thin layer that translates game-specific concepts into GameForge's universal protocol.
 
 ```
-                    ┌─────────────────────────────────────────────┐
-                    │              GameForge Orchestrator          │
-                    └──────┬───────────────────────────┬──────────┘
-                           │                           │
-              ┌────────────▼───────────┐   ┌──────────▼──────────────┐
-              │    Designer Agent      │   │     Critic Agent         │
-              │  (LLM-driven)          │   │  (Diversity + Fun)       │
-              │  Generates proposals   │   │  Scores the ecosystem    │
-              └────────────┬───────────┘   └──────────▲──────────────┘
-                           │                          │
-              ┌────────────▼───────────┐   ┌──────────┴──────────────┐
-              │   Simulator Agent      │──▶│    Balancer Agent        │
-              │  (Rule Engine Wrapper) │   │  (Statistical Analysis)  │
-              │  Runs 1000 games/batch │   │  Detects OP/UP content   │
-              └────────────────────────┘   └─────────────────────────┘
-                           │
-              ┌────────────▼───────────┐
-              │  game_engine.py        │ ← Owned by Zhilong (DO NOT EDIT)
-              │  eval/metrics.py       │ ← Owned by Zhilong (DO NOT EDIT)
-              └────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                    GameForge Framework                        │
+│                                                              │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐    │
+│  │ Designer │→ │Simulator │→ │ Balancer │→ │  Critic  │    │
+│  │ (LLM)    │  │(Engine)  │  │(Stats)   │  │(Quality) │    │
+│  └──────────┘  └──────────┘  └──────────┘  └──────────┘    │
+│       ↑                                         │            │
+│       └─────────── feedback loop ───────────────┘            │
+│                                                              │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │              GameAdapter (Abstract)                     │  │
+│  │  - content_schema()    - simulate()                    │  │
+│  │  - design_constraints() - classify_build()             │  │
+│  │  - balance_targets()   - export()                      │  │
+│  └────────────────────────────────────────────────────────┘  │
+│       ▲            ▲            ▲            ▲               │
+│  ┌────┴───┐  ┌────┴───┐  ┌────┴───┐  ┌────┴───┐           │
+│  │  HU    │  │  RPG   │  │  CCG   │  │ Puzzle │           │
+│  │Adapter │  │Adapter │  │Adapter │  │Adapter │           │
+│  └────────┘  └────────┘  └────────┘  └────────┘           │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-**What GameForge generates and evaluates:**
-- **God Tile configurations** — which 28 tiles exist in the pool, their stats and effects
-- **Flower Card sets** — which cards are available and their balance parameters
-- **Blind scaling variants** — target score curves per ante
-- **Starting economy setups** — initial gold, tile material distributions
+**Key differentiator:** Most game balancing tools are hard-coded for one game. GameForge separates the _what_ (game-specific content) from the _how_ (multi-agent generation and evaluation pipeline), making it reusable across genres.
 
 ---
 
-## HU Game Model
+## Design Philosophy
 
-Understanding HU's design is essential for the agents. Key concepts:
+### 1. Game-Agnostic Core
+The framework knows nothing about specific games. It operates on abstract concepts:
+- **Content** — a structured proposal (schema defined by the adapter)
+- **Episodes** — simulated game runs producing measurable outcomes
+- **Metrics** — numeric signals (win rate, diversity, economy health)
+- **Feedback** — natural language critique driving the next iteration
 
-### Tile System
-- **136 tiles total**: 3 number suits (万/条/筒, values 1–9, 4 copies each) + 4 winds + 3 dragons = 34 unique types
-- **Materials**: Copper/Silver/Gold/Bamboo/Ice/Glass/Glazed/Jade/Porcelain/Emerald — special properties
-  - 瓷 (Porcelain): wildcard → any honor tile
-  - 翡翠 (Emerald): wildcard → any number 1–9 same suit
+### 2. Clean Agent Boundaries
+Each agent has a typed input/output contract. Agents communicate only through the Orchestrator via structured messages (Pydantic models serializable to JSON). No shared mutable state — enables independent testing, swapping, and parallelization.
 
-### Hand Structure
-- **14 tiles** = 4 melds (chow/pong/kong) + 1 pair
-- **Win forms**: Standard (4+1), Seven Pairs (七对), Thirteen Orphans (国士无双)
-- **Discard budget**: 5 discards per round; draw budget separate
+### 3. LLM as Reasoning Engine, Not Magic
+The Designer and Critic use LLMs for _reasoning about design tradeoffs_, not for generating arbitrary code. The LLM proposes structured content (validated by schema), and the Simulator + Balancer verify it empirically. This grounds LLM creativity in measurable outcomes.
 
-### Fan Patterns (Scoring Multipliers)
-| Tier | Fans | Multiplier Range |
-|------|------|-----------------|
-| Basic | 胡牌, 平和, 一气通贯, 三色同顺 | ×1–×2 |
-| Mid | 断幺九, 混一色, 对对和, 七对, 三暗刻, 小三元, 混老头 | ×3–×8 |
-| High | 清一色, 大三元, 小四喜, 四暗刻, 连七对 | ×8–×32 |
-| Yakuman | 字一色, 清老头, 大四喜, 绿一色, 九莲宝灯, 国士无双 | ×20–×88 |
-
-**Scoring Formula:**
-```
-finalScore = (baseScore + chipModifiers) × (fanMultiplierSum × multMultiplier + additiveMult)
-baseScore  = 50 (default)
-```
-
-### Roguelike Structure
-- **8 Antes**, each with 3 Blinds (Small → Big → Boss)
-- **Blind targets** scale from 300 (Ante 1 Small) to 2700+ (Ante 8 Boss)
-- **Between blinds**: Shop phase where player buys God Tiles and Flower Cards
-- **God Tiles**: 28 tiles across 4 Bonds (Gamble/Vision/Wealth/Transform), 4 rarities (Green/Blue/Purple/Gold)
-  - Bond levels unlock at 2/4/6 tiles, providing passive escalating effects
-- **Flower Cards**: 32 consumables across 4 types (Plum/Bamboo/Orchid/Chrysanthemum)
-  - Instant (立即生效) or On-Win (胡牌结算)
-
-### Balance Targets
-| Metric | Target Range | Notes |
-|--------|-------------|-------|
-| Win rate (Ante 1–2) | 65–80% | Learnable entry |
-| Win rate (Ante 3–5) | 45–60% | Strategic challenge |
-| Win rate (Ante 6–8) | 25–45% | Mastery required |
-| Avg fan tier on win | Mid-tier by Ante 4 | Progression signal |
-| God Tile purchase rate | >60% per shop | Items feel useful |
-| Build archetype diversity | ≥4 viable strategies | Prevent meta lock |
+### 4. Iteration Over Perfection
+The pipeline is explicitly iterative. A proposal is rarely accepted on the first try — the Critic's feedback steers the Designer toward better designs over multiple rounds. This mirrors how human game designers iterate.
 
 ---
 
@@ -115,111 +89,134 @@ baseScore  = 50 (default)
 ### Agent Responsibilities
 
 #### Designer Agent
-- **Role**: Proposes new content configurations using an LLM
-- **Input**: Design constraints, current balance metrics, Critic feedback
-- **Output**: A `ContentProposal` — a structured description of god tiles, flower cards, and scaling parameters
-- **Strategy**: Chain-of-thought reasoning about game design tradeoffs; references HU fan/god tile taxonomy
-- **LLM**: Any instruction-following LLM (Claude, GPT-4, Gemini); swappable
+- **Role**: Proposes new content configurations using LLM chain-of-thought reasoning
+- **Input**: Design constraints, balance targets, iteration history, Critic feedback
+- **Output**: A `ContentProposal` — structured content matching the game's schema
+- **Strategy**: References game taxonomy, previous failures, and Critic suggestions to generate increasingly better proposals
+- **LLM**: Any instruction-following model (Claude, GPT-4, Gemini); swappable via `LLMClient`
 
 #### Simulator Agent
-- **Role**: Wraps `game_engine.py` and runs N simulation episodes per proposal
-- **Input**: `ContentProposal`, simulation config (N games, random seeds)
-- **Output**: `SimulationReport` — raw game logs aggregated into statistics
-- **Implementation**: Pure Python wrapper; no game logic lives here
-- **Performance target**: 1000 games per configuration in <60 seconds
+- **Role**: Runs N game episodes per proposal using the game engine
+- **Input**: `ContentProposal` + simulation config (N episodes, seeds, difficulty range)
+- **Output**: `SimulationReport` — aggregated statistics from all episodes
+- **Implementation**: Delegates to `GameAdapter.simulate()`; no game logic lives in the agent
 
 #### Balancer Agent
-- **Role**: Analyzes `SimulationReport`, identifies balance problems
-- **Input**: `SimulationReport` + `ContentProposal`
-- **Output**: `BalanceReport` — flags OP/UP items, suggests parameter tweaks
-- **Methods**: Statistical testing (z-tests for win rate deviations), item usage correlation, fan pattern frequency analysis
+- **Role**: Statistical analysis of simulation results against balance targets
+- **Input**: `SimulationReport` + `ContentProposal` + `BalanceTargets`
+- **Output**: `BalanceReport` — flags problems (OP/UP items, pacing issues), suggests parameter mutations
+- **Methods**: Z-tests for metric deviations, correlation analysis, distribution tests
 
 #### Critic Agent
-- **Role**: Evaluates the meta-health of a content set — not just balance but fun
-- **Input**: `ContentProposal` + `BalanceReport`
-- **Output**: `CriticReport` — diversity score, fun estimate, anti-pattern flags
-- **Methods**: Shannon entropy on build archetypes, homogeneity penalty if single strategy dominates
+- **Role**: Evaluates meta-health — not just balance, but diversity, fun, and novelty
+- **Input**: `ContentProposal` + `BalanceReport` + run history
+- **Output**: `CriticReport` — composite quality score, accept/reject decision, natural language feedback
+- **Methods**: Shannon entropy for strategy diversity, novelty scoring against prior proposals, anti-pattern detection
 
 ### Orchestrator
-- Manages the agent pipeline: Designer → Simulator → Balancer → Critic → (loop)
-- Maintains a `RunHistory` ledger for all proposals and their scores
-- Implements iteration policy: accept/reject/mutate proposals
-- Exposes CLI entrypoint and optionally a REST API
+- Manages the pipeline loop: Designer → Simulator → Balancer → Critic → (iterate)
+- Maintains `RunHistory` ledger across iterations
+- Implements `IterationPolicy`: accept / mutate / redesign / fail
+- Exposes CLI entrypoint and optional REST API
 
 ---
 
-## Directory Structure
+## Game Adapter Interface
 
+The `GameAdapter` is the **only thing you implement** to plug a new game into GameForge.
+
+```python
+# gameforge/adapters/base.py
+
+from abc import ABC, abstractmethod
+from typing import Any
+
+class GameAdapter(ABC):
+    """
+    Abstract interface between GameForge and a specific game.
+    Implement this to plug any game into the framework.
+    """
+
+    @property
+    @abstractmethod
+    def game_name(self) -> str:
+        """Human-readable game name."""
+        ...
+
+    @abstractmethod
+    def content_schema(self) -> dict:
+        """
+        Returns a JSON Schema describing valid ContentProposal structure
+        for this game. Used by Designer for structured output and validation.
+        """
+        ...
+
+    @abstractmethod
+    def design_constraints(self) -> DesignConstraints:
+        """
+        Returns hard constraints the Designer must respect.
+        E.g., exactly 28 items, cost range [1, 10], etc.
+        """
+        ...
+
+    @abstractmethod
+    def balance_targets(self) -> BalanceTargets:
+        """
+        Returns target metric ranges for the Balancer.
+        E.g., win_rate per difficulty level, item usage rates, etc.
+        """
+        ...
+
+    @abstractmethod
+    def game_taxonomy(self) -> str:
+        """
+        Returns a natural language description of game concepts,
+        terminology, and design space. Fed to Designer LLM as context.
+        """
+        ...
+
+    @abstractmethod
+    def simulate(
+        self,
+        proposal: dict,
+        n_episodes: int,
+        seeds: list[int] | None = None,
+        difficulty_range: tuple[int, int] = (1, 8),
+    ) -> SimulationReport:
+        """
+        Run n_episodes of the game with the given content proposal.
+        Returns aggregated statistics.
+        """
+        ...
+
+    @abstractmethod
+    def classify_build(self, episode: EpisodeResult) -> str:
+        """
+        Classify a single game episode into a strategy archetype.
+        E.g., "aggressive", "control", "combo", etc.
+        """
+        ...
+
+    @abstractmethod
+    def export(self, proposal: dict, output_dir: str) -> list[str]:
+        """
+        Convert an accepted proposal into game-native format files.
+        Returns list of generated file paths.
+        """
+        ...
 ```
-gameforge/
-│
-├── ARCHITECTURE.md          ← This document
-├── README.md                ← Quick start + project overview
-├── pyproject.toml           ← Python project config (uv/pip)
-│
-├── gameforge/               ← Main Python package
-│   ├── __init__.py
-│   │
-│   ├── orchestrator/
-│   │   ├── __init__.py
-│   │   ├── orchestrator.py  ← Pipeline coordinator
-│   │   ├── run_history.py   ← Ledger of all proposals + results
-│   │   └── iteration_policy.py  ← Accept/reject/mutate logic
-│   │
-│   ├── agents/
-│   │   ├── __init__.py
-│   │   ├── base_agent.py    ← Abstract base class
-│   │   ├── designer.py      ← Designer Agent
-│   │   ├── simulator.py     ← Simulator Agent
-│   │   ├── balancer.py      ← Balancer Agent
-│   │   └── critic.py        ← Critic Agent
-│   │
-│   ├── models/              ← Typed data models (Pydantic)
-│   │   ├── __init__.py
-│   │   ├── content.py       ← ContentProposal, GodTileDef, FlowerCardDef
-│   │   ├── simulation.py    ← SimulationReport, GameLog, EpisodeResult
-│   │   ├── balance.py       ← BalanceReport, BalanceFlag, ItemStats
-│   │   └── critique.py      ← CriticReport, DiversityMetrics
-│   │
-│   ├── tools/
-│   │   ├── __init__.py
-│   │   ├── llm_client.py    ← Abstracted LLM API (OpenAI/Anthropic/Gemini)
-│   │   ├── stats.py         ← Statistical helpers (z-tests, entropy, CI)
-│   │   └── serializer.py    ← JSON serialization helpers
-│   │
-│   └── config/
-│       ├── __init__.py
-│       ├── defaults.py      ← Default simulation params, LLM settings
-│       └── hu_taxonomy.py   ← Fan names, god tile bonds, rarity weights
-│                              (mirrors HU TypeScript data, Python side)
-│
-├── simulator/
-│   ├── __init__.py
-│   ├── game_engine.py       ← ⛔ Zhilong's (DO NOT EDIT)
-│   └── engine_adapter.py    ← Thin wrapper: ContentProposal → engine calls
-│
-├── eval/
-│   ├── __init__.py
-│   ├── metrics.py           ← ⛔ Zhilong's (DO NOT EDIT)
-│   └── metrics_adapter.py   ← Adapts raw logs → SimulationReport fields
-│
-├── runs/                    ← Runtime data (gitignored large files)
-│   ├── proposals/           ← Saved ContentProposals as JSON
-│   ├── reports/             ← Simulation + balance + critic reports
-│   └── accepted/            ← Final accepted configurations
-│
-├── tests/
-│   ├── test_designer.py
-│   ├── test_balancer.py
-│   ├── test_critic.py
-│   ├── test_orchestrator.py
-│   └── fixtures/            ← Sample proposals + simulation data
-│
-└── scripts/
-    ├── run_pipeline.py      ← CLI entrypoint: run the full pipeline
-    ├── inspect_run.py       ← Pretty-print a run's history
-    └── export_to_hu.py      ← Convert accepted proposal → HU TypeScript data files
-```
+
+### What the Adapter Provides
+
+| Method | Purpose | Example (roguelike) | Example (CCG) |
+|--------|---------|---------------------|---------------|
+| `content_schema()` | What content looks like | Item defs + scaling curves | Card defs + deck rules |
+| `design_constraints()` | Hard limits | "Exactly 28 items, 4 categories" | "60-card pool, 5 rarities" |
+| `balance_targets()` | What "balanced" means | Win rate 45-55% per level | Deck win rate 48-52% |
+| `game_taxonomy()` | LLM context | Item types, scoring rules | Keywords, mana curve |
+| `simulate()` | Run the game engine | 1000 roguelike runs | 1000 bot-vs-bot matches |
+| `classify_build()` | Strategy labeling | "flush build", "combo build" | "aggro", "control", "midrange" |
+| `export()` | Output to game files | TypeScript data files | JSON card definitions |
 
 ---
 
@@ -229,6 +226,7 @@ All agents implement the `BaseAgent` protocol:
 
 ```python
 # gameforge/agents/base_agent.py
+
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -247,170 +245,132 @@ class BaseAgent(ABC):
         Execute the agent's task.
         
         Args:
-            context: Input data (typed by each agent's contract below).
+            context: Input data (typed per agent contract).
         Returns:
-            Output data (typed by each agent's contract below).
+            Output data (typed per agent contract).
         Raises:
             AgentError: On unrecoverable failure.
         """
         ...
 ```
 
-### Designer Agent Interface
+### Designer Agent Contract
 
 ```python
-# gameforge/agents/designer.py
-
 class DesignerInput(TypedDict):
-    iteration: int                          # Current iteration number
-    design_constraints: DesignConstraints   # Hard limits (see models)
-    previous_results: list[IterationResult] # History of past proposals+scores
-    critic_feedback: CriticReport | None    # Feedback from last Critic run
+    iteration: int
+    content_schema: dict              # From GameAdapter
+    design_constraints: DesignConstraints
+    balance_targets: BalanceTargets
+    game_taxonomy: str                # Natural language game context
+    previous_results: list[IterationResult]
+    critic_feedback: CriticReport | None
 
 class DesignerOutput(TypedDict):
-    proposal: ContentProposal    # The generated content configuration
-    design_rationale: str        # LLM reasoning for this proposal
+    proposal: dict                    # Validated against content_schema
+    design_rationale: str             # LLM reasoning
 ```
 
-### Simulator Agent Interface
+### Simulator Agent Contract
 
 ```python
-# gameforge/agents/simulator.py
-
 class SimulatorInput(TypedDict):
-    proposal: ContentProposal    # Content to simulate
-    n_games: int                 # How many games to run (default: 1000)
-    seeds: list[int] | None      # Optional: fixed seeds for reproducibility
-    ante_range: tuple[int, int]  # Which antes to simulate (default: 1–8)
+    proposal: dict
+    n_episodes: int                   # Default: 1000
+    seeds: list[int] | None
+    difficulty_range: tuple[int, int]
 
 class SimulatorOutput(TypedDict):
-    report: SimulationReport     # Aggregated statistics
-    raw_logs: list[GameLog]      # Per-game traces (optional, large)
+    report: SimulationReport
 ```
 
-### Balancer Agent Interface
+### Balancer Agent Contract
 
 ```python
-# gameforge/agents/balancer.py
-
 class BalancerInput(TypedDict):
-    proposal: ContentProposal
+    proposal: dict
     report: SimulationReport
+    balance_targets: BalanceTargets
 
 class BalancerOutput(TypedDict):
     balance_report: BalanceReport
-    suggested_mutations: list[ProposalMutation]  # Concrete parameter changes
+    suggested_mutations: list[ProposalMutation]
 ```
 
-### Critic Agent Interface
+### Critic Agent Contract
 
 ```python
-# gameforge/agents/critic.py
-
 class CriticInput(TypedDict):
-    proposal: ContentProposal
+    proposal: dict
     balance_report: BalanceReport
-    run_history: list[IterationResult]  # All proposals so far (for diversity)
+    run_history: list[IterationResult]
 
 class CriticOutput(TypedDict):
     critic_report: CriticReport
-    accept: bool          # Should orchestrator accept this proposal?
-    score: float          # Composite quality score [0.0, 1.0]
-    feedback: str         # Natural language feedback for Designer
+    accept: bool
+    score: float                      # Composite quality [0.0, 1.0]
+    feedback: str                     # Natural language for Designer
 ```
 
 ---
 
 ## Message & Data Formats
 
-All inter-agent messages are **Pydantic models** serializable to JSON. This enables logging, replay, and easy inspection.
+All inter-agent messages are **Pydantic models** serializable to JSON.
 
-### ContentProposal
-
-```python
-# gameforge/models/content.py
-
-class GodTileDef(BaseModel):
-    id: str                    # e.g. "gamble_green_01"
-    name: str                  # Display name
-    bond: GodTileBond          # gamble | vision | wealth | transform
-    rarity: GodTileRarity      # green | blue | purple | gold
-    price: int                 # Gold cost in shop
-    effect_type: str           # Enum: "chips_add", "mult_add", "mult_multiply",
-                               #       "gold_add", "probability", "transform"
-    effect_value: float        # Numeric effect magnitude
-    effect_condition: str | None  # e.g. "has_dragon", "fan:清一色"
-
-class FlowerCardDef(BaseModel):
-    id: str
-    card_type: FlowerCardType  # plum | bamboo | orchid | chrysanthemum
-    trigger: Literal["instant", "on_win"]
-    name: str
-    cost: int
-    effect_type: str
-    effect_value: float | None
-
-class BlindScaling(BaseModel):
-    """Target score = base + (ante - 1) * step"""
-    small_base: int = 300
-    small_step: int = 150
-    big_base: int = 450
-    big_step: int = 225
-    boss_base: int = 600
-    boss_step: int = 300
-
-class ContentProposal(BaseModel):
-    proposal_id: str               # UUID
-    iteration: int
-    created_at: datetime
-    god_tiles: list[GodTileDef]    # Must have exactly 7 per bond × 4 bonds = 28
-    flower_cards: list[FlowerCardDef]  # 8 per type × 4 types = 32
-    blind_scaling: BlindScaling
-    starting_gold: int = 4
-    design_rationale: str          # LLM's explanation
-```
-
-### SimulationReport
+### Core Models (Game-Agnostic)
 
 ```python
-# gameforge/models/simulation.py
-
-class EpisodeResult(BaseModel):
-    seed: int
-    ante_reached: int              # How far the player got (1–8)
-    final_ante_cleared: bool
-    rounds_played: int
-    fans_used: dict[str, int]      # Fan name → frequency across all rounds
-    god_tiles_purchased: list[str] # God tile IDs bought during run
-    flower_cards_used: list[str]
-    build_archetype: str           # Inferred: "triplets" | "flush" | "honors" | "mixed" | etc.
-    per_blind_scores: list[float]  # Score achieved per blind attempt
+# gameforge/models/core.py
 
 class SimulationReport(BaseModel):
+    """Aggregated results from N game episodes."""
     proposal_id: str
-    n_games: int
-    ante_range: tuple[int, int]
+    n_episodes: int
+    difficulty_range: tuple[int, int]
     
-    # Primary metrics
-    win_rate_by_ante: dict[int, float]    # ante → fraction of runs that cleared
-    avg_rounds_per_run: float
+    # Primary metrics (game-agnostic)
+    win_rate_by_difficulty: dict[int, float]
+    avg_episode_length: float
     
-    # Fan pattern statistics
-    fan_frequency: dict[str, float]       # fan_name → fraction of wins containing it
-    avg_fan_multiplier_on_win: float
-    
-    # God Tile & economy
-    god_tile_purchase_rate: dict[str, float]  # tile_id → purchase rate
-    avg_gold_per_ante: dict[int, float]
-    
-    # Derived by metrics.py (Zhilong's)
-    win_rate_distribution: list[float]    # Per-game win/loss sequence
+    # Strategy diversity
     build_archetype_counts: dict[str, int]
     
-    episodes: list[EpisodeResult]         # Full per-game records
+    # Item/content usage rates
+    content_usage_rates: dict[str, float]   # content_id → usage fraction
+    
+    # Per-episode records
+    episodes: list[EpisodeResult]
+    
+    # Extensible: adapters can add game-specific metrics
+    extra_metrics: dict[str, Any] = {}
+
+class EpisodeResult(BaseModel):
+    """Single game episode outcome."""
+    seed: int
+    difficulty_reached: int
+    completed: bool
+    rounds_played: int
+    content_used: list[str]           # IDs of content items used
+    build_archetype: str
+    scores: list[float]               # Per-round/level scores
+    extra: dict[str, Any] = {}        # Game-specific data
+
+class BalanceTargets(BaseModel):
+    """What 'balanced' means for this game."""
+    win_rate_targets: dict[int, tuple[float, float]]  # difficulty → (min, max)
+    content_usage_range: tuple[float, float]           # (min, max) per item
+    min_strategy_diversity: float                       # Min Shannon entropy
+    extra_targets: dict[str, Any] = {}
+
+class DesignConstraints(BaseModel):
+    """Hard limits on content proposals."""
+    content_counts: dict[str, int]    # category → exact count required
+    value_ranges: dict[str, tuple[float, float]]  # field → (min, max)
+    extra_constraints: dict[str, Any] = {}
 ```
 
-### BalanceReport
+### Balance & Critique Models
 
 ```python
 # gameforge/models/balance.py
@@ -422,52 +382,46 @@ class BalanceSeverity(str, Enum):
 
 class BalanceFlag(BaseModel):
     severity: BalanceSeverity
-    item_type: Literal["god_tile", "flower_card", "blind", "global"]
-    item_id: str | None
-    metric: str            # e.g. "win_rate_ante_1", "purchase_rate"
+    content_type: str              # e.g., "item", "scaling", "global"
+    content_id: str | None
+    metric: str
     observed: float
     expected_range: tuple[float, float]
     description: str
 
 class ProposalMutation(BaseModel):
     """A concrete suggested parameter change."""
-    item_id: str
-    field: str             # e.g. "effect_value", "price"
+    content_id: str
+    field: str
     current_value: float
     suggested_value: float
     reason: str
 
 class BalanceReport(BaseModel):
     proposal_id: str
-    overall_health: float          # [0, 1] — 1 = perfectly balanced
+    overall_health: float          # [0, 1]
     flags: list[BalanceFlag]
-    op_items: list[str]            # God tile IDs flagged as overpowered
-    up_items: list[str]            # God tile IDs flagged as underpowered
+    op_items: list[str]
+    up_items: list[str]
     suggested_mutations: list[ProposalMutation]
-```
 
-### CriticReport
-
-```python
 # gameforge/models/critique.py
 
 class DiversityMetrics(BaseModel):
-    shannon_entropy: float         # Build archetype diversity [0, log(N)]
-    dominant_archetype: str | None # Most common build (if >40% → warning)
+    shannon_entropy: float
+    dominant_archetype: str | None
     dominant_archetype_rate: float
-    unique_builds_seen: int        # Of N games, how many distinct archetypes
+    unique_builds_seen: int
 
 class CriticReport(BaseModel):
     proposal_id: str
     diversity: DiversityMetrics
-    
-    fun_score: float               # [0, 1] — estimated enjoyment proxy
-    novelty_score: float           # [0, 1] — how different from prior proposals
-    anti_patterns: list[str]       # e.g. "meta_lock", "snowball_dominance"
-    
-    composite_score: float         # Weighted final quality score
+    fun_score: float               # [0, 1]
+    novelty_score: float           # [0, 1]
+    anti_patterns: list[str]
+    composite_score: float
     accept: bool
-    feedback_for_designer: str     # Natural language critique
+    feedback_for_designer: str
 ```
 
 ---
@@ -477,27 +431,32 @@ class CriticReport(BaseModel):
 ### Orchestrator Flow
 
 ```
+adapter = load_adapter(game_name)  # e.g., HUAdapter, RPGAdapter
+
 for iteration in 1..MAX_ITERATIONS:
     
     1. Designer.run({
            iteration,
-           design_constraints,
+           content_schema   = adapter.content_schema(),
+           design_constraints = adapter.design_constraints(),
+           balance_targets  = adapter.balance_targets(),
+           game_taxonomy    = adapter.game_taxonomy(),
            previous_results,
-           critic_feedback  ← from last iteration's Critic output
+           critic_feedback
        })
        → ContentProposal
     
     2. Simulator.run({
            proposal,
-           n_games = 1000,
-           seeds = [0..999],
-           ante_range = (1, 8)
+           n_episodes = 1000,
+           # delegates to adapter.simulate()
        })
        → SimulationReport
     
     3. Balancer.run({
            proposal,
-           report = SimulationReport
+           report,
+           balance_targets = adapter.balance_targets()
        })
        → BalanceReport
     
@@ -508,38 +467,127 @@ for iteration in 1..MAX_ITERATIONS:
        })
        → CriticReport
     
-    5. if CriticReport.accept and BalanceReport.overall_health > 0.75:
-           SAVE proposal to runs/accepted/
-           NOTIFY Zhilong
-           BREAK
-       else:
-           APPEND to run_history
-           CONTINUE with next iteration
+    5. IterationPolicy.decide(history) →
+           ACCEPT   → save to runs/accepted/, notify, break
+           MUTATE   → apply mutations, re-simulate
+           REDESIGN → fresh Designer proposal
+           FAIL     → surface to human after MAX_ITERATIONS
 ```
 
 ### Iteration Policy
 
 ```python
-# gameforge/orchestrator/iteration_policy.py
-
 class IterationPolicy:
-    """Decide what to do after each Critic report."""
+    MAX_ITERATIONS = 20
+    ACCEPT_THRESHOLD = 0.75        # composite_score
+    MUTATE_THRESHOLD = 0.50
+    MAX_CONSECUTIVE_MUTATES = 3    # Force redesign after 3 failed mutations
     
     def decide(self, history: list[IterationResult]) -> IterationDecision:
-        """
-        Returns one of:
-          ACCEPT     — quality threshold met, stop
-          MUTATE     — apply Balancer's suggested mutations, re-simulate
-          REDESIGN   — reset and ask Designer for a fresh proposal
-          FAIL       — too many iterations, surface to Zhilong
-        """
+        """ACCEPT | MUTATE | REDESIGN | FAIL"""
 ```
 
-**Default policy parameters:**
-- `MAX_ITERATIONS = 20`
-- `ACCEPT_THRESHOLD = composite_score >= 0.75`
-- `MUTATE_THRESHOLD = composite_score >= 0.50` (try fixing before redesigning)
-- After 3 consecutive MUTATE cycles → force REDESIGN
+---
+
+## Evaluation Framework
+
+These metrics are computed from `SimulationReport` and are **game-agnostic**:
+
+### 1. Win Rate Distribution
+Per difficulty level, the fraction of episodes completed. Compared against `BalanceTargets.win_rate_targets`.
+
+### 2. Strategy Diversity (Shannon Entropy)
+```
+H = -Σ p(archetype_i) × log(p(archetype_i))
+```
+Higher entropy = more diverse viable strategies. Target: `BalanceTargets.min_strategy_diversity`.
+
+### 3. Content Usage Rates
+Per content item, fraction of episodes where it was used/purchased. Flags items that are always picked (OP) or never picked (UP).
+
+### 4. Episode Length Distribution
+Mean and variance of rounds per episode. Too short = snowball; too long = stall.
+
+### 5. Composite Score
+Weighted combination of balance health, diversity, and novelty:
+```python
+composite = (
+    w_balance * balance_report.overall_health +
+    w_diversity * normalize(diversity.shannon_entropy) +
+    w_novelty * novelty_score
+)
+```
+Weights are configurable per game via the adapter.
+
+---
+
+## Directory Structure
+
+```
+gameforge/
+│
+├── ARCHITECTURE.md          ← This document
+├── README.md
+├── pyproject.toml
+│
+├── gameforge/               ← Framework package
+│   ├── __init__.py
+│   │
+│   ├── orchestrator/
+│   │   ├── orchestrator.py        ← Pipeline coordinator
+│   │   ├── run_history.py         ← Iteration ledger
+│   │   └── iteration_policy.py    ← Accept/reject/mutate logic
+│   │
+│   ├── agents/
+│   │   ├── base_agent.py          ← Abstract base class
+│   │   ├── designer.py            ← Designer Agent
+│   │   ├── simulator.py           ← Simulator Agent
+│   │   ├── balancer.py            ← Balancer Agent
+│   │   └── critic.py              ← Critic Agent
+│   │
+│   ├── adapters/
+│   │   ├── base.py                ← GameAdapter abstract interface
+│   │   └── registry.py            ← Adapter discovery + loading
+│   │
+│   ├── models/
+│   │   ├── core.py                ← ContentProposal, SimulationReport, EpisodeResult
+│   │   ├── balance.py             ← BalanceReport, BalanceFlag, ProposalMutation
+│   │   ├── critique.py            ← CriticReport, DiversityMetrics
+│   │   └── targets.py             ← BalanceTargets, DesignConstraints
+│   │
+│   ├── tools/
+│   │   ├── llm_client.py          ← Abstracted LLM API
+│   │   ├── stats.py               ← Statistical helpers
+│   │   └── serializer.py          ← JSON helpers
+│   │
+│   └── config/
+│       └── defaults.py            ← Default pipeline params
+│
+├── adapters/                ← Game-specific adapters (separate from core)
+│   └── hu/
+│       ├── __init__.py
+│       ├── adapter.py             ← HUAdapter(GameAdapter)
+│       ├── taxonomy.py            ← HU game concepts for LLM context
+│       ├── schema.py              ← HU content JSON schema
+│       ├── engine_bridge.py       ← Wraps HU's game_engine.py
+│       └── exporter.py            ← Converts proposals → HU TypeScript files
+│
+├── runs/                    ← Runtime data (gitignored)
+│   ├── proposals/
+│   ├── reports/
+│   └── accepted/
+│
+├── tests/
+│   ├── test_designer.py
+│   ├── test_balancer.py
+│   ├── test_critic.py
+│   ├── test_orchestrator.py
+│   └── fixtures/
+│
+└── scripts/
+    ├── run_pipeline.py            ← CLI: gameforge run --game hu
+    └── inspect_run.py             ← Pretty-print run history
+```
 
 ---
 
@@ -548,109 +596,94 @@ class IterationPolicy:
 | Tool | Used By | Purpose |
 |------|---------|---------|
 | LLM API (Claude/GPT/Gemini) | Designer, Critic | Content generation, feedback synthesis |
-| `game_engine.py` | Simulator (via adapter) | Simulating mahjong game runs |
-| `eval/metrics.py` | Simulator (via adapter) | Computing win rates, diversity scores |
+| Game Engine (via adapter) | Simulator | Running game episodes |
 | Pydantic | All agents | Schema validation, serialization |
-| `scipy.stats` | Balancer | Z-tests for win rate deviation from target |
+| `scipy.stats` | Balancer | Z-tests, distribution analysis |
 | `numpy` | Balancer, Critic | Statistical computations |
-| `scipy.stats.entropy` | Critic | Shannon entropy for build diversity |
-| JSON file I/O | Orchestrator | Persisting proposals and reports in `runs/` |
+| `scipy.stats.entropy` | Critic | Shannon entropy for diversity |
+| JSON file I/O | Orchestrator | Persisting proposals and reports |
 | `pytest` | Tests | Unit + integration testing |
 | `uv` | Dev | Python package management |
 
 ### LLM Client Abstraction
 
 ```python
-# gameforge/tools/llm_client.py
-
 class LLMClient(Protocol):
     def complete(self, prompt: str, system: str = "") -> str: ...
 
-class AnthropicClient:
-    """Uses claude-3-5-sonnet (default) or configurable."""
-
-class OpenAIClient:
-    """Uses gpt-4o (default) or configurable."""
-
-class GeminiClient:
-    """Uses gemini-2.0-flash or configurable."""
+# Swappable implementations:
+# AnthropicClient, OpenAIClient, GeminiClient
 ```
-
-The Designer and Critic accept any `LLMClient` — swap models freely.
 
 ---
 
-## Evaluation Metrics
+## Example: HU Adapter
 
-These metrics are computed from `SimulationReport` (feeding from Zhilong's `metrics.py`):
+To demonstrate how a game plugs into GameForge, here's a sketch of the HU adapter (roguelike mahjong deck-builder):
 
-### 1. Win Rate Distribution
-**Definition:** For each Ante level, the fraction of game runs where the player cleared all 3 blinds in that Ante.
+```python
+# adapters/hu/adapter.py
 
-**Target range:** 45%–55% overall (with natural progression: easier early antes, harder late antes).
-
-**Balance flags:**
-- Win rate > 70% at any Ante → content too easy (OP items)
-- Win rate < 20% at Ante 1 → too hard for new players (UP content or scaling too steep)
-
-### 2. Build Archetype Diversity (Shannon Entropy)
-**Definition:** Shannon entropy H of the build archetype distribution across N simulated games.
+class HUAdapter(GameAdapter):
+    game_name = "HU"
+    
+    def content_schema(self) -> dict:
+        """28 God Tiles (4 bonds × 7) + 32 Flower Cards (4 types × 8) + scaling."""
+        return HU_CONTENT_SCHEMA
+    
+    def design_constraints(self) -> DesignConstraints:
+        return DesignConstraints(
+            content_counts={"god_tiles": 28, "flower_cards": 32},
+            value_ranges={"price": (1, 10), "effect_value": (0.1, 50.0)},
+        )
+    
+    def balance_targets(self) -> BalanceTargets:
+        return BalanceTargets(
+            win_rate_targets={
+                1: (0.65, 0.80),  # Ante 1: learnable
+                4: (0.45, 0.60),  # Mid-game: strategic
+                8: (0.25, 0.45),  # Endgame: mastery
+            },
+            content_usage_range=(0.20, 0.90),
+            min_strategy_diversity=1.5,
+        )
+    
+    def simulate(self, proposal, n_episodes, seeds, difficulty_range):
+        """Wraps Zhilong's game_engine.py via engine_bridge."""
+        return self.engine_bridge.run(proposal, n_episodes, seeds)
+    
+    def classify_build(self, episode) -> str:
+        """Infer archetype from fan pattern frequencies."""
+        # "flush", "triplets", "honors", "seven_pairs", "mixed"
+        ...
+    
+    def export(self, proposal, output_dir) -> list[str]:
+        """Generate godTiles.ts and flowerCards.ts for HU project."""
+        ...
 ```
-H = -Σ p(archetype_i) × log(p(archetype_i))
-```
-**Archetypes:** triplets, chow-based, flush (half/full), honors, seven-pairs, mixed
 
-**Target:** H ≥ 1.5 (out of theoretical max ~1.79 for 6 equal archetypes). Below 1.0 → meta lock warning.
-
-### 3. Average Game Rounds
-**Definition:** Mean number of blind attempts across all game runs.
-
-**Target:** 15–25 rounds per full run (roughly Antes 1–5 average completion). A run too short suggests snowball; too long suggests stall.
-
-### 4. God Tile Purchase Rate
-**Definition:** Per god tile, fraction of games where it was purchased when offered.
-
-**Target:** 40%–80%. Below 20% → tile feels weak/overpriced. Above 90% → dominates shop decisions.
-
-### 5. Fan Pattern Frequency
-**Definition:** Per fan pattern, fraction of winning hands containing it.
-
-**Target:** No single fan should appear in >60% of wins (except 胡牌 which is universal). Mid/high-tier fans should be viable (>10% each in late antes).
-
----
-
-## Boundaries
-
-> **Files owned by Zhilong — GameForge reads but never writes these:**
-
-| File | Why Off-Limits |
-|------|----------------|
-| `simulator/game_engine.py` | Core mahjong rule engine; correctness is paramount |
-| `eval/metrics.py` | Win rate + diversity scoring logic; authoritative source |
-
-GameForge interacts with these exclusively through adapter layers (`engine_adapter.py`, `metrics_adapter.py`) that translate GameForge types to/from whatever interfaces Zhilong defines.
-
-**Contract assumption:** `game_engine.py` will expose a callable that accepts a `ContentProposal`-compatible dict and returns per-game results. The exact interface will be finalized when Zhilong implements it.
+Other potential adapters:
+- **CCG Adapter** — card game balancing (deck win rates, mana curves)
+- **RPG Adapter** — skill tree / item balancing (DPS distribution, build diversity)
+- **Puzzle Adapter** — level difficulty curves (solve rates, hint usage)
 
 ---
 
 ## Open Questions for Review
 
-These are design decisions that need Zhilong's input before implementation:
+1. **Adapter granularity** — Should `simulate()` be a single method, or split into `setup_episode()` + `run_episode()` + `collect_results()` for finer control?
 
-1. **`game_engine.py` interface** — What's the expected input/output signature? Does it accept a config dict, or will there be a class-based API?
+2. **Content schema validation** — Should the framework validate proposals against `content_schema()` before passing to Simulator, or trust the Designer to produce valid output?
 
-2. **"Deck content" scope** — Should GameForge propose mutations to existing HU content (e.g., tweak existing god tile values), or always propose fully synthetic new content sets? The architecture supports both, but the Designer's LLM prompt strategy differs significantly.
+3. **Parallel simulation** — Should the Simulator support multiprocessing by default? This is adapter-dependent (some engines aren't thread-safe).
 
-3. **Simulation speed** — Is 1000 games per proposal feasible in <60s on your machine? If not, should we use parallel processes (multiprocessing) or reduce to 500 games?
+4. **LLM budget policy** — The Designer calls an LLM every iteration (up to 20). Should we enforce a per-run token budget, or let the adapter configure this?
 
-4. **Archetype inference** — How should the Simulator classify a run's "build archetype" (triplets/flush/etc.)? Should this come from `game_engine.py`, or should GameForge infer it from `fans_used` frequencies?
+5. **Human-in-the-loop** — Should accepted proposals always require human approval, or can the pipeline auto-accept above a threshold?
 
-5. **LLM budget** — The Designer calls an LLM every iteration. With up to 20 iterations per pipeline run, costs add up. Preferred model + budget ceiling?
+6. **Adapter discovery** — Plugin-based (entry points) or simple registry dict? For now, a registry is simpler.
 
-6. **Export format** — `scripts/export_to_hu.py` converts accepted proposals back into HU TypeScript files (`godTiles.ts`, `flowerCards.ts`). Should this be auto-applied or require manual approval?
-
-7. **Acceptance criteria** — Is `composite_score >= 0.75` the right threshold? Should Zhilong always be notified for human approval before a proposal is marked "accepted"?
+7. **Metric extensibility** — The `extra_metrics` / `extra` fields allow adapters to pass game-specific data. Is this sufficient, or should there be a formal extension mechanism?
 
 ---
 
@@ -658,8 +691,5 @@ These are design decisions that need Zhilong's input before implementation:
 
 | Date | Author | Change |
 |------|--------|--------|
-| 2026-03-08 | HU Dev Agent | Initial architecture draft (Phase 1) |
-
----
-
-*Pending Zhilong's review and approval before Phase 2 (implementation) begins.*
+| 2026-03-08 | HU Dev Agent | Initial draft (HU-specific) |
+| 2026-03-10 | Friday | Refactored to game-agnostic framework with GameAdapter interface |
