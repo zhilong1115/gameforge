@@ -17,6 +17,10 @@ Human writes game_design.md
     │ Producer │ → execution_plan.json (human reviews & approves)
     └─────────┘
          ↓
+    ┌────────────┐
+    │ Translator │ → runnable multi-agent code (AutoGen / CrewAI / LangGraph / OpenClaw)
+    └────────────┘
+         ↓
     ┌──────────────────────────────┐
     │  Round 1: Core Engine        │ ← Design → Implement → Playtest → Fix loop
     │  Round 2: Game Systems       │
@@ -30,15 +34,18 @@ Human writes game_design.md
 
 ---
 
-## Three Layers
+## Four Layers
 
 ### Layer 1: Producer
 Reads the game design, generates a detailed execution plan. Does not write code.
 
-### Layer 2: Dev Loop
+### Layer 2: Translator
+Converts the execution plan into runnable multi-agent code for a specific framework (AutoGen, CrewAI, LangGraph, OpenClaw, etc.). Pluggable — swap runtimes without changing the plan.
+
+### Layer 3: Dev Loop
 Three agents cycle on each task: Designer → Implementer → Playtester. Loops until exit criteria met.
 
-### Layer 3: Game Adapter (optional)
+### Layer 4: Game Adapter (optional)
 Headless interface to the game engine for high-volume automated playtesting (1000+ simulations). Only built when the game has numerical balance needs.
 
 ---
@@ -295,7 +302,101 @@ Every round ends with `"human_review": true`. The human:
 
 ---
 
-## Layer 2: Dev Loop
+## Layer 2: Translator
+
+The Translator bridges the framework-agnostic execution plan and a concrete multi-agent runtime. It reads `execution_plan.json` and generates runnable code.
+
+### Why a Separate Layer?
+
+The execution plan is **framework-agnostic** — it describes _what_ to do, not _how_ to orchestrate it. Different teams use different agent frameworks. The Translator is a plugin that adapts the plan to your runtime of choice.
+
+```
+execution_plan.json
+        │
+   ┌────┴────┐
+   │Translator│
+   └────┬────┘
+        │
+   ┌────┴──────────────────────────────┐
+   │  AutoGen  │ CrewAI │ LangGraph │ OpenClaw │
+   └───────────────────────────────────┘
+```
+
+### Translator Interface
+
+```python
+class Translator(ABC):
+    """Converts an execution plan into runnable multi-agent code."""
+
+    @abstractmethod
+    def translate(self, plan: ExecutionPlan) -> ProjectFiles:
+        """
+        Input: execution_plan.json
+        Output: Generated source files ready to run.
+        """
+        ...
+```
+
+### AutoGen Translator (Reference Implementation)
+
+```python
+class AutoGenTranslator(Translator):
+    def translate(self, plan: ExecutionPlan) -> ProjectFiles:
+        files = {}
+        
+        for round in plan.rounds:
+            # Create agents from task definitions
+            agents = []
+            for task in round.tasks:
+                agent = self._create_agent(
+                    role=task.agent,          # "designer" | "implementer" | "playtester"
+                    model=task.model,         # "claude-opus-4-6"
+                    system_context=task.system_context,
+                )
+                agents.append(agent)
+            
+            # Create GroupChat with routing logic
+            group_chat = self._create_group_chat(
+                agents=agents,
+                routing=self._feedback_router(),  # bug→implementer, boring→designer
+                max_iterations=round.max_iterations,
+                exit_criteria=round.exit_criteria,
+            )
+            
+            # Bind tools (file I/O, git, browser, test runner)
+            self._bind_tools(agents, round.playtest_mode)
+            
+            files[f"round_{round.id}.py"] = self._render(group_chat)
+        
+        # Main orchestrator that runs rounds sequentially with human gates
+        files["main.py"] = self._render_orchestrator(plan)
+        
+        return files
+```
+
+### Other Translators
+
+| Translator | Runtime | Notes |
+|---|---|---|
+| `AutoGenTranslator` | Microsoft AutoGen | GroupChat + function calling. Reference implementation. |
+| `CrewAITranslator` | CrewAI | Crew + Tasks + Agents mapping. |
+| `LangGraphTranslator` | LangChain/LangGraph | State graph with conditional edges for feedback routing. |
+| `OpenClawTranslator` | OpenClaw | Maps to `sessions_spawn` sub-agents with `sessions_send` communication. |
+
+### What Gets Generated
+
+For each round, the Translator produces:
+1. **Agent definitions** — role, model, system prompt (from `system_context`)
+2. **Communication topology** — who talks to whom, feedback routing rules
+3. **Tool bindings** — file write, git commit, test runner, browser control (for UI playtest)
+4. **Loop control** — max iterations, exit criteria checks, escalation to human
+5. **Human gate** — pause and wait for approval between rounds
+
+The generated code is **self-contained and runnable** — `python main.py` starts the full pipeline.
+
+---
+
+## Layer 3: Dev Loop
 
 Each task within a round runs through a three-agent loop:
 
@@ -361,7 +462,7 @@ A task's loop ends when:
 
 ---
 
-## Layer 3: Game Adapter (Optional)
+## Layer 4: Game Adapter (Optional)
 
 The adapter is a **headless interface** to the game engine, enabling high-volume automated playtesting without rendering UI.
 
@@ -417,14 +518,15 @@ The AI players are **not LLMs** — they're simple algorithmic strategies (e.g.,
 1. Human writes game_design.md
 2. Producer reads it → generates execution_plan.json
 3. Human reviews plan → approves / edits
-4. For each round:
+4. Translator converts plan → runnable multi-agent code for chosen framework
+5. For each round:
    a. Show round summary to human
    b. For each task in round:
       - Assign to agent (designer / implementer / playtester)
       - Run dev loop until acceptance criteria met or max iterations
       - Commit code after each implementation cycle
    c. Round complete → human playtests → approves to proceed
-5. Game deployed
+6. Game deployed
 ```
 
 ### Example: HU Development Timeline
@@ -472,7 +574,9 @@ Round 5: Polish & Deploy (Week 4)
 
 4. **Execution plan is the contract**: Everything is specified upfront — agents, models, context, criteria. No ambiguity during execution.
 
-5. **Game-agnostic framework**: The three layers (Producer, Dev Loop, Adapter) work for any game genre. Only the adapter internals are game-specific.
+5. **Game-agnostic framework**: The four layers (Producer, Translator, Dev Loop, Adapter) work for any game genre. Only the adapter internals are game-specific.
+
+6. **Runtime-agnostic orchestration**: The execution plan is framework-independent. Swap AutoGen for CrewAI or LangGraph by changing the Translator — everything else stays the same.
 
 ---
 
