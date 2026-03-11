@@ -8,60 +8,87 @@
 
 ## What Is GameForge?
 
-GameForge is a multi-agent framework that turns a game design document into a playable, deployed game — end to end. No human coding required (but human review at every milestone).
+GameForge turns a game design document into a playable, deployed game using three AI agents in a continuous loop. A human reviews at milestones but never micromanages the process.
 
 ```
 Human writes game_design.md
          ↓
     ┌─────────┐
-    │ Producer │ → execution_plan.json (human reviews & approves)
+    │ Producer │ → execution_plan.json (milestones + agent configs)
     └─────────┘
          ↓
     ┌────────────┐
     │ Translator │ → runnable multi-agent code (AutoGen / CrewAI / LangGraph / OpenClaw)
     └────────────┘
          ↓
-    ┌──────────────────────────────┐
-    │  Round 1: Core Engine        │ ← Design → Implement → Playtest → Fix loop
-    │  Round 2: Game Systems       │
-    │  Round 3: Adapter (if needed)│
-    │  Round 4: Content & Balance  │
-    │  Round 5: Polish & Deploy    │
-    └──────────────────────────────┘
+    ┌─────────────────────────────────────────┐
+    │                                         │
+    │   Designer ⇄ Implementer ⇄ Playtester  │
+    │              continuous loop             │
+    │                                         │
+    │   ── Milestone 1 ── human review ✅ ──  │
+    │   ── Milestone 2 ── human review ✅ ──  │
+    │   ── Milestone 3 ── human review ✅ ──  │
+    │   ── Milestone 4 ── done 🎉            │
+    │                                         │
+    └─────────────────────────────────────────┘
          ↓
     Playable game
 ```
 
 ---
 
+## Core Idea
+
+The entire development process is **one continuous loop** of three agents:
+
+```
+┌──────────┐     ┌─────────────┐     ┌────────────┐
+│ Designer │────→│ Implementer │────→│ Playtester  │
+│          │     │             │     │             │
+│ "What to │     │ "Build it"  │     │ "Test it"   │
+│  build"  │     │             │     │             │
+└──────────┘     └─────────────┘     └────────────┘
+      ↑                ↑                    │
+      │                │                    │
+      │                └── 🐛 Bug ──────────┤
+      │                                     │
+      └──── 😴 Boring / 📊 Imbalanced ─────┘
+```
+
+The loop runs continuously. Agents decide among themselves what to work on next. The only interruptions are **milestones** — checkpoints where the system pauses for human review.
+
+**This is not a pipeline.** Agents communicate freely:
+- Playtester finds a bug → tells Implementer directly
+- Playtester says "boring" → tells Designer to rethink
+- Implementer has a question about spec → asks Designer
+- Designer wants to validate an idea quickly → asks Implementer for a prototype
+
+---
+
 ## Four Layers
 
 ### Layer 1: Producer
-Reads the game design, generates a detailed execution plan. Does not write code.
+Reads `game_design.md`, generates `execution_plan.json` with milestones and agent configurations. Does not prescribe tasks — agents self-organize toward each milestone.
 
 ### Layer 2: Translator
-Converts the execution plan into runnable multi-agent code for a specific framework (AutoGen, CrewAI, LangGraph, OpenClaw, etc.). Pluggable — swap runtimes without changing the plan.
+Converts the execution plan into runnable multi-agent code for a specific framework. Pluggable — swap runtimes without changing the plan.
 
 ### Layer 3: Dev Loop
-Three agents cycle on each task: Designer → Implementer → Playtester. Loops until exit criteria met.
+The three agents (Designer, Implementer, Playtester) run in a continuous cycle, self-organizing their work toward each milestone.
 
 ### Layer 4: Game Adapter (optional)
-Headless interface to the game engine for high-volume automated playtesting (1000+ simulations). Only built when the game has numerical balance needs.
+Headless interface to the game engine for high-volume automated playtesting. Built by the agents themselves when needed, not pre-defined.
 
 ---
 
 ## Layer 1: Producer Agent
 
 ### Input
-A `game_design.md` written by the human. Contains:
-- Game genre and concept
-- Core mechanics
-- Target platform
-- Art style / tech preferences
-- Known constraints
+A `game_design.md` written by the human.
 
 ### Output
-An `execution_plan.json` — the complete blueprint for building the game.
+An `execution_plan.json`:
 
 ```json
 {
@@ -76,239 +103,102 @@ An `execution_plan.json` — the complete blueprint for building the game.
     }
   },
 
-  "adapter_needed": true,
-  "adapter_reason": "Game has numerical balance (god tiles, flower cards, difficulty scaling) requiring statistical playtesting",
+  "agents": {
+    "designer": {
+      "model": "claude-opus-4-6",
+      "system_context": "You are a game designer for a roguelike mahjong deck-builder called HU. You design game mechanics, content (god tiles, flower cards), difficulty curves, and UI layouts. You output structured specs (JSON or markdown). When the Playtester reports something is boring or imbalanced, you propose design changes. You do not write code.",
+      "tools": ["file_read", "file_write"]
+    },
+    "implementer": {
+      "model": "claude-opus-4-6",
+      "system_context": "You are a game developer building HU, a roguelike mahjong deck-builder using Phaser 3 + TypeScript + Vite. You implement features from Designer specs and fix bugs from Playtester reports. You commit code to git after each change. You follow existing code patterns and maintain type safety.",
+      "tools": ["file_read", "file_write", "git_commit", "terminal"]
+    },
+    "playtester": {
+      "model": "claude-opus-4-6",
+      "system_context": "You are a game tester for HU, a roguelike mahjong deck-builder. You play the game and report findings. Categorize each finding as: BUG (send to Implementer), BORING/TOO_HARD/TOO_EASY (send to Designer), or PASS (milestone criteria met). When an adapter is available, you can also run batch simulations for statistical analysis.",
+      "tools": ["browser_control", "batch_simulate"],
+      "playtest_modes": {
+        "ui": "Control game through browser — observe visuals, interactions, feel",
+        "adapter": "Run headless simulations — statistical balance analysis (available after agents build it)"
+      }
+    }
+  },
 
-  "rounds": [
+  "milestones": [
     {
       "id": 1,
-      "name": "Core Mahjong Engine",
-      "goal": "Player can complete one hand of mahjong with correct fan scoring",
-      "playtest_mode": "ui",
-      "tasks": [
-        {
-          "id": "1.1",
-          "name": "Tile system and hand representation",
-          "agent": "implementer",
-          "model": "claude-opus-4-6",
-          "system_context": "Implement a mahjong tile system: 136 tiles (3 number suits × 9 values × 4 copies + 4 winds × 4 + 3 dragons × 4). Support hand operations: draw, discard, chow, pong, kong. Use TypeScript with strict types.",
-          "files_to_create": ["src/engine/tiles.ts", "src/engine/hand.ts"],
-          "acceptance": "Unit tests pass for all tile operations",
-          "depends_on": []
-        },
-        {
-          "id": "1.2",
-          "name": "Win detection and fan scoring",
-          "agent": "implementer",
-          "model": "claude-opus-4-6",
-          "system_context": "Implement mahjong win detection (standard 4+1, seven pairs, thirteen orphans) and fan pattern scoring. Reference fan table: 胡牌 ×1, 平和 ×1, 清一色 ×8, 国士无双 ×88, etc.",
-          "files_to_create": ["src/engine/win-detector.ts", "src/engine/fan-scorer.ts"],
-          "acceptance": "All 34 fan patterns correctly identified and scored against test cases",
-          "depends_on": ["1.1"]
-        },
-        {
-          "id": "1.3",
-          "name": "Basic game UI — table, hand, discard",
-          "agent": "implementer",
-          "model": "claude-opus-4-6",
-          "system_context": "Build a Phaser 3 scene showing: player's 14-tile hand, discard pile, draw button, tile selection for discard. Dark theme. Mobile-first layout (portrait).",
-          "files_to_create": ["src/scenes/GameScene.ts", "src/ui/TileSprite.ts"],
-          "acceptance": "Player can see hand, tap to select, discard, draw, and win a hand visually",
-          "depends_on": ["1.2"]
-        }
+      "name": "Playable Hand",
+      "goal": "Player can complete one full hand of mahjong with correct fan scoring displayed",
+      "exit_criteria": [
+        "All 3 win forms work (standard, seven pairs, thirteen orphans)",
+        "Fan scoring matches expected values for 10 test hands",
+        "UI shows hand, discard area, score breakdown",
+        "No crashes during a full hand"
       ],
-      "exit_criteria": "Human plays one complete hand in browser. Fan score displays correctly. No crashes.",
       "human_review": true
     },
-
     {
       "id": 2,
       "name": "Roguelike Loop",
-      "goal": "Player can progress through Ante 1–8 with shop phases between blinds",
-      "playtest_mode": "ui",
-      "tasks": [
-        {
-          "id": "2.1",
-          "name": "Ante/Blind progression system",
-          "agent": "implementer",
-          "model": "claude-opus-4-6",
-          "system_context": "Implement 8 Antes, each with 3 Blinds (Small/Big/Boss). Target scores scale per ante. Player must reach target score in one hand to clear a blind. Track gold earned per clear.",
-          "files_to_create": ["src/engine/progression.ts"],
-          "acceptance": "Game progresses through all 8 antes with correct target scaling",
-          "depends_on": []
-        },
-        {
-          "id": "2.2",
-          "name": "Shop system",
-          "agent": "implementer",
-          "model": "claude-opus-4-6",
-          "system_context": "Between blinds, show a shop offering god tiles and flower cards for purchase with gold. Implement inventory, purchase, and equip logic.",
-          "files_to_create": ["src/engine/shop.ts", "src/scenes/ShopScene.ts"],
-          "acceptance": "Player can buy items, gold deducted, items appear in inventory",
-          "depends_on": ["2.1"]
-        },
-        {
-          "id": "2.3",
-          "name": "God tile effects",
-          "agent": "designer",
-          "model": "claude-opus-4-6",
-          "system_context": "Design 28 god tiles (4 bonds × 7 tiles). Each has: name, bond, rarity, price, effect_type, effect_value, trigger_condition. Bonds: Gamble (high risk/reward), Vision (information advantage), Wealth (economy), Transform (tile manipulation). Output as structured JSON.",
-          "output_format": "json",
-          "acceptance": "28 tiles with no duplicate effects, reasonable value ranges, all 4 bonds feel distinct",
-          "depends_on": []
-        },
-        {
-          "id": "2.4",
-          "name": "Implement god tile effects",
-          "agent": "implementer",
-          "model": "claude-opus-4-6",
-          "system_context": "Implement the god tile effect system. Each tile hooks into scoring, draw, discard, or shop events. Load tile definitions from JSON. Support bond-level bonuses at 2/4/6 tiles.",
-          "files_to_create": ["src/engine/god-tiles.ts", "src/data/god-tiles.json"],
-          "acceptance": "All 28 tile effects trigger correctly during gameplay",
-          "depends_on": ["2.2", "2.3"]
-        }
+      "goal": "Player can progress through Ante 1–8 with shop phases, god tiles, and flower cards",
+      "exit_criteria": [
+        "8 Antes × 3 Blinds with correct target scaling",
+        "Shop appears between blinds with purchasable items",
+        "God tile effects trigger correctly during gameplay",
+        "Flower cards can be used and consumed",
+        "Player can reach Ante 8 (not necessarily win)"
       ],
-      "exit_criteria": "Human plays Ante 1 through Ante 3, buys god tiles, uses flower cards. Feels like a roguelike.",
       "human_review": true
     },
-
     {
       "id": 3,
-      "name": "Game Adapter",
-      "goal": "Headless game engine for automated batch simulation",
-      "playtest_mode": "none",
-      "condition": "adapter_needed == true",
-      "tasks": [
-        {
-          "id": "3.1",
-          "name": "Headless engine wrapper",
-          "agent": "implementer",
-          "model": "claude-opus-4-6",
-          "system_context": "Create a headless wrapper around the game engine that can run a full Ante 1–8 game without any UI. Accept a content config (god tiles, flower cards, scaling) as JSON input. Output per-game results as JSON.",
-          "files_to_create": ["src/adapter/headless-engine.ts", "src/adapter/types.ts"],
-          "acceptance": "Can run 100 games via CLI in under 30 seconds",
-          "depends_on": []
-        },
-        {
-          "id": "3.2",
-          "name": "AI player strategies",
-          "agent": "implementer",
-          "model": "claude-opus-4-6",
-          "system_context": "Implement greedy AI player strategies: discard selection (minimize shanten), shop buying (cost-efficiency), flower card usage (use when beneficial). Support multiple strategy profiles: aggressive, conservative, balanced, random.",
-          "files_to_create": ["src/adapter/ai-player.ts", "src/adapter/strategies.ts"],
-          "acceptance": "AI can complete full runs. Different strategies produce measurably different outcomes.",
-          "depends_on": ["3.1"]
-        },
-        {
-          "id": "3.3",
-          "name": "Batch simulator and statistics",
-          "agent": "implementer",
-          "model": "claude-opus-4-6",
-          "system_context": "Run N games with M strategies, aggregate results: win rate by ante, god tile purchase rates, fan pattern frequency, build archetype distribution, Shannon entropy of strategies.",
-          "files_to_create": ["src/adapter/batch-sim.ts", "src/adapter/stats.ts"],
-          "acceptance": "1000-game batch produces valid statistical report matching expected format",
-          "depends_on": ["3.2"]
-        }
+      "name": "Content Balance",
+      "goal": "All content balanced with diverse viable strategies",
+      "adapter_hint": "Statistical playtesting recommended — agents should build a headless adapter if not already done",
+      "exit_criteria": [
+        "Win rate by ante within targets: Ante 1-2 (65-80%), Ante 3-5 (45-60%), Ante 6-8 (25-45%)",
+        "Build archetype Shannon entropy >= 1.5 (4+ viable strategies)",
+        "No god tile with >90% purchase rate (OP) or <20% (UP)",
+        "No known exploits or degenerate combos",
+        "3 consecutive batch runs (1000 games each) meet all targets"
       ],
-      "exit_criteria": "Batch simulation of 1000 games completes in <60s with valid statistics output.",
       "human_review": true
     },
-
     {
       "id": 4,
-      "name": "Content & Balance",
-      "goal": "All content balanced: 4+ viable strategies, win rates within target ranges",
-      "playtest_mode": "adapter",
-      "tasks": [
-        {
-          "id": "4.1",
-          "name": "Balance analysis and iteration",
-          "agent": "designer",
-          "model": "claude-opus-4-6",
-          "system_context": "Analyze batch simulation results. Identify overpowered/underpowered god tiles (purchase rate >90% or <20%), unviable strategies (archetype <5% representation), and difficulty spikes (win rate drops >30% between consecutive antes). Propose parameter adjustments.",
-          "acceptance": "Win rate by ante within targets: Ante 1-2 (65-80%), Ante 3-5 (45-60%), Ante 6-8 (25-45%). Shannon entropy of build archetypes >= 1.5. No single god tile with >90% purchase rate.",
-          "depends_on": []
-        },
-        {
-          "id": "4.2",
-          "name": "Exploit detection",
-          "agent": "playtester",
-          "model": "claude-opus-4-6",
-          "system_context": "You are a game tester trying to break the game. Look at god tile combinations that produce degenerate strategies: infinite loops, guaranteed wins, zero-risk infinite gold. Report any combo that trivializes the game.",
-          "acceptance": "No known exploits remain. All flagged combos reviewed and fixed.",
-          "depends_on": ["4.1"]
-        }
-      ],
-      "exit_criteria": "3 consecutive batch runs meet all balance targets. No known exploits.",
-      "human_review": true
-    },
-
-    {
-      "id": 5,
-      "name": "Polish & Deploy",
+      "name": "Ship It",
       "goal": "Production-ready game deployed to target platform",
-      "playtest_mode": "ui",
-      "tasks": [
-        {
-          "id": "5.1",
-          "name": "Visual polish",
-          "agent": "implementer",
-          "model": "claude-opus-4-6",
-          "system_context": "Add animations (tile draw, discard, win celebration), sound effects, screen transitions. Follow the existing dark theme. Mobile-first.",
-          "acceptance": "Game feels responsive and polished. No visual glitches on mobile.",
-          "depends_on": []
-        },
-        {
-          "id": "5.2",
-          "name": "Platform deployment",
-          "agent": "implementer",
-          "model": "claude-opus-4-6",
-          "system_context": "Package as YouTube Playable: single HTML5 bundle, <5MB, touch controls, 9:16 portrait. Set up build pipeline.",
-          "acceptance": "Game loads and plays correctly as YouTube Playable.",
-          "depends_on": ["5.1"]
-        }
+      "exit_criteria": [
+        "Animations, sound effects, transitions polished",
+        "Mobile-friendly (touch controls, portrait 9:16)",
+        "Bundle <5MB for YouTube Playables",
+        "Final human playthrough with no issues"
       ],
-      "exit_criteria": "Game deployed and playable on target platform. Human does final playthrough.",
       "human_review": true
     }
   ]
 }
 ```
 
-### Producer Responsibilities
+### What the Producer Does NOT Do
 
-1. **Read** `game_design.md`
-2. **Analyze** scope — what systems are needed, what's the tech stack
-3. **Decide** `adapter_needed` — does this game need statistical balancing?
-4. **Decompose** into rounds with clear goals and dependencies
-5. **Generate** per-task agent assignments with:
-   - Which agent (designer / implementer / playtester)
-   - Recommended model
-   - System context (what the agent needs to know)
-   - Acceptance criteria
-   - File dependencies
-6. **Output** `execution_plan.json`
-7. **Wait** for human review and approval before execution begins
+- ❌ Define specific tasks or work items
+- ❌ Assign tasks to specific agents
+- ❌ Prescribe implementation order
+- ❌ Decide how agents communicate
 
-### Human Review Points
-
-Every round ends with `"human_review": true`. The human:
-- Plays the game (for UI playtest rounds)
-- Reviews the execution plan before each round starts
-- Can modify tasks, reorder, add/remove
-- Approves to proceed or sends back for replanning
-
-**GameForge never auto-proceeds past a round without human approval.**
+The Producer defines **where to go** (milestones). The agents decide **how to get there**.
 
 ---
 
 ## Layer 2: Translator
 
-The Translator bridges the framework-agnostic execution plan and a concrete multi-agent runtime. It reads `execution_plan.json` and generates runnable code.
+Converts `execution_plan.json` into runnable multi-agent code for a specific framework.
 
 ### Why a Separate Layer?
 
-The execution plan is **framework-agnostic** — it describes _what_ to do, not _how_ to orchestrate it. Different teams use different agent frameworks. The Translator is a plugin that adapts the plan to your runtime of choice.
+The execution plan is **framework-agnostic** — it describes milestones and agent configs, not orchestration mechanics. Different teams use different frameworks. The Translator adapts the plan to your runtime.
 
 ```
 execution_plan.json
@@ -326,273 +216,246 @@ execution_plan.json
 
 ```python
 class Translator(ABC):
-    """Converts an execution plan into runnable multi-agent code."""
-
     @abstractmethod
     def translate(self, plan: ExecutionPlan) -> ProjectFiles:
         """
-        Input: execution_plan.json
-        Output: Generated source files ready to run.
+        Input:  execution_plan.json
+        Output: Runnable source files for the target framework.
         """
         ...
 ```
 
 ### AutoGen Translator (Reference Implementation)
 
-```python
-class AutoGenTranslator(Translator):
-    def translate(self, plan: ExecutionPlan) -> ProjectFiles:
-        files = {}
-        
-        for round in plan.rounds:
-            # Create agents from task definitions
-            agents = []
-            for task in round.tasks:
-                agent = self._create_agent(
-                    role=task.agent,          # "designer" | "implementer" | "playtester"
-                    model=task.model,         # "claude-opus-4-6"
-                    system_context=task.system_context,
-                )
-                agents.append(agent)
-            
-            # Create GroupChat with routing logic
-            group_chat = self._create_group_chat(
-                agents=agents,
-                routing=self._feedback_router(),  # bug→implementer, boring→designer
-                max_iterations=round.max_iterations,
-                exit_criteria=round.exit_criteria,
-            )
-            
-            # Bind tools (file I/O, git, browser, test runner)
-            self._bind_tools(agents, round.playtest_mode)
-            
-            files[f"round_{round.id}.py"] = self._render(group_chat)
-        
-        # Main orchestrator that runs rounds sequentially with human gates
-        files["main.py"] = self._render_orchestrator(plan)
-        
-        return files
-```
+Generates:
+- **Agent definitions** with system prompts from `agents.*. system_context`
+- **GroupChat** with free-form communication (agents talk to each other, not routed by a pipeline)
+- **Milestone checker** — after each Playtester turn, evaluate exit criteria; if all met, pause for human
+- **Tool bindings** — file I/O, git, browser control, terminal
+- **Human gate** — blocks between milestones until human approves
 
-### Other Translators
+### Supported Translators
 
-| Translator | Runtime | Notes |
+| Translator | Runtime | Communication Model |
 |---|---|---|
-| `AutoGenTranslator` | Microsoft AutoGen | GroupChat + function calling. Reference implementation. |
-| `CrewAITranslator` | CrewAI | Crew + Tasks + Agents mapping. |
-| `LangGraphTranslator` | LangChain/LangGraph | State graph with conditional edges for feedback routing. |
-| `OpenClawTranslator` | OpenClaw | Maps to `sessions_spawn` sub-agents with `sessions_send` communication. |
-
-### What Gets Generated
-
-For each round, the Translator produces:
-1. **Agent definitions** — role, model, system prompt (from `system_context`)
-2. **Communication topology** — who talks to whom, feedback routing rules
-3. **Tool bindings** — file write, git commit, test runner, browser control (for UI playtest)
-4. **Loop control** — max iterations, exit criteria checks, escalation to human
-5. **Human gate** — pause and wait for approval between rounds
-
-The generated code is **self-contained and runnable** — `python main.py` starts the full pipeline.
+| `AutoGenTranslator` | Microsoft AutoGen | GroupChat — agents speak freely |
+| `CrewAITranslator` | CrewAI | Crew with delegation enabled |
+| `LangGraphTranslator` | LangChain/LangGraph | State graph with dynamic routing |
+| `OpenClawTranslator` | OpenClaw | `sessions_spawn` + `sessions_send` |
 
 ---
 
 ## Layer 3: Dev Loop
 
-Each task within a round runs through a three-agent loop:
+### The Three Agents
+
+#### Designer
+- **Job**: Define what to build — mechanics, content, UI specs
+- **Communicates with**: Implementer (hands off specs), Playtester (receives design feedback)
+- **Does not**: Write code
+
+#### Implementer
+- **Job**: Write code, fix bugs, commit to git
+- **Communicates with**: Designer (asks for clarification), Playtester (receives bug reports)
+- **Does not**: Decide what to build (follows Designer's specs)
+
+#### Playtester
+- **Job**: Play the game and report findings
+- **Communicates with**: Implementer (bug reports), Designer (design feedback)
+- **Does not**: Write code or design features
+
+### Feedback Routing
+
+Playtester categorizes every finding. Routing is automatic:
+
+| Finding | Category | Sent To | Example |
+|---|---|---|---|
+| Something broken | 🐛 **BUG** | Implementer | "Score shows NaN after seven pairs win" |
+| Not fun | 😴 **BORING** | Designer | "Same strategy wins every time" |
+| Too hard | 📊 **TOO_HARD** | Designer | "Can't clear Ante 3 regardless of strategy" |
+| Too easy | 📊 **TOO_EASY** | Designer | "Beat Ante 8 on first try without items" |
+| All good | ✅ **PASS** | Milestone check | "Meets all exit criteria" |
+
+### Free-Form Communication
+
+Unlike a rigid pipeline, agents can talk to each other at any time:
 
 ```
-┌──────────┐     ┌─────────────┐     ┌────────────┐
-│ Designer │────→│ Implementer │────→│ Playtester  │
-│          │     │             │     │             │
-│ "What"   │     │ "Build it"  │     │ "Test it"   │
-└──────────┘     └─────────────┘     └────────────┘
-      ↑                ↑                    │
-      │                │                    │
-      │                └── 🐛 Bug ──────────┤
-      │                                     │
-      └──── 😴 Boring / 📊 Imbalanced ─────┘
+Designer: "Here's the spec for the shop system: [JSON spec]"
+Implementer: "Should the shop refresh between blinds or only between antes?"
+Designer: "Between blinds. Updated spec: [JSON]"
+Implementer: "Done. Shop implemented, committed."
+Playtester: "Shop works but I can buy infinite items — gold goes negative."
+Implementer: "Fixed. Added gold check before purchase."
+Playtester: "Works now. But the shop only shows 3 items, feels empty."
+Designer: "Good point. Increase to 5 items, add reroll button for 1 gold."
+Implementer: "Done."
+Playtester: "PASS ✅"
 ```
-
-### Agent Roles
-
-#### Designer Agent
-- **Job**: Define what to build — game mechanics, content specs, UI layouts
-- **Input**: Task description from execution plan + feedback from Playtester
-- **Output**: Structured design document (JSON, markdown, or spec)
-- **When active**: New feature design, redesign after "boring" or "too hard" feedback
-- **Not involved in**: Bug fixes (those go straight to Implementer)
-
-#### Implementer Agent
-- **Job**: Write code that realizes the design
-- **Input**: Design spec + codebase context + bug reports
-- **Output**: Working code (committed to repo)
-- **Model**: Coding-optimized (Claude Opus, Codex)
-- **When active**: Initial implementation + bug fix cycles
-
-#### Playtester Agent
-- **Job**: Play the game (via UI or adapter) and report findings
-- **Input**: Running game instance or simulation results
-- **Output**: Structured feedback report
-
-Playtester feedback is categorized and routed:
-
-| Feedback Type | Routed To | Example |
-|---|---|---|
-| 🐛 **Bug** | → Implementer | "Score shows NaN after winning with seven pairs" |
-| 😴 **Boring** | → Designer | "Every game I just buy the cheapest god tiles and win" |
-| 📊 **Too Hard** | → Designer | "Can't clear Ante 3 no matter what strategy I use" |
-| 📊 **Too Easy** | → Designer | "Beat Ante 8 on first try without any god tiles" |
-| ✅ **Pass** | → Next task | "Plays as expected, no issues found" |
 
 ### Playtest Modes
 
-| Mode | How It Works | Speed | Best For |
+| Mode | How | Speed | When |
 |---|---|---|---|
-| **UI** | Agent controls the game through browser (click, observe) | Slow (minutes/game) | UX bugs, visual issues, feel |
-| **Adapter** | Agent calls headless engine, runs 1000+ games | Fast (seconds/batch) | Balance, statistics, exploits |
+| **UI** | Agent controls game through browser | Minutes/game | Early milestones — catching bugs, UX issues |
+| **Adapter** | Headless engine, 1000+ batch simulations | Seconds/batch | Balance milestone — statistical analysis |
 
-Early rounds use UI mode. Balance rounds use Adapter mode.
+The adapter is **not pre-built** — when the agents reach the balance milestone and realize they need batch testing, they build the adapter themselves as part of the loop. The `adapter_hint` in the milestone tells them this is expected.
 
 ### Loop Termination
 
-A task's loop ends when:
-- Playtester reports ✅ **Pass** (meets acceptance criteria)
-- **Max iterations reached** (default: 5 design cycles, 10 bug fix cycles) → escalate to human
-- **Human override** — human can force-accept or force-redesign at any point
+The loop for a milestone ends when:
+- Playtester reports ✅ **PASS** on all exit criteria
+- **Max iterations reached** (configurable, default: 50 agent turns per milestone) → escalate to human
+- **Human override** — human can force-proceed or force-redo at any review point
 
 ---
 
 ## Layer 4: Game Adapter (Optional)
 
-The adapter is a **headless interface** to the game engine, enabling high-volume automated playtesting without rendering UI.
+A headless interface to the game engine for batch simulation. **Built by the agents, not pre-defined.**
 
 ### When Is It Needed?
 
-| Game Type | Adapter Needed? | Why |
-|---|---|---|
-| Roguelike with items/stats | ✅ Yes | Need to balance hundreds of items across thousands of runs |
-| Card game with deck building | ✅ Yes | Need to test deck balance statistically |
-| Narrative adventure | ❌ No | Balance isn't numerical; UI playtesting is sufficient |
-| Puzzle game | ⚠️ Maybe | If difficulty curves need tuning |
+The Producer sets `adapter_hint` on milestones that likely need statistical playtesting. The agents decide when and how to build it.
 
-The Producer sets `adapter_needed` based on the game design. If true, a dedicated Adapter Round is scheduled.
+| Game Type | Adapter Likely? | Why |
+|---|---|---|
+| Roguelike with items | ✅ Yes | Balance hundreds of items across thousands of runs |
+| Card game | ✅ Yes | Deck balance requires statistical testing |
+| Narrative game | ❌ No | No numerical balance needed |
+| Puzzle game | ⚠️ Maybe | Difficulty curve tuning |
+
+### What the Agents Build
+
+When they need an adapter, the Implementer creates:
+
+1. **Headless Engine** — game logic without UI, accepts content config as JSON
+2. **AI Player Strategies** — algorithmic players (greedy, aggressive, conservative)
+3. **Batch Runner** — runs N games × M strategies, outputs statistics
+4. **Stats Module** — win rates, Shannon entropy, usage rates, exploit detection
+
+The AI players are **not LLMs** — they're deterministic algorithms (minimize shanten, maximize cost-efficiency). Consistent, fast, cheap. The goal is measuring **relative differences between configurations**, not optimal play.
 
 ### Adapter Interface
 
 ```typescript
 interface GameAdapter {
-  // Core
   gameName: string;
-  
-  // Content definition
-  contentSchema(): JSONSchema;           // What content looks like
-  designConstraints(): Constraints;       // Hard limits for Designer
-  balanceTargets(): BalanceTargets;        // What "balanced" means
-  gameTaxonomy(): string;                 // Natural language game concepts for LLM
-
-  // Simulation
+  contentSchema(): JSONSchema;
+  designConstraints(): Constraints;
+  balanceTargets(): BalanceTargets;
+  gameTaxonomy(): string;
   simulate(config: ContentConfig, options: SimOptions): SimulationReport;
-  
-  // Strategy classification
   classifyBuild(episode: EpisodeResult): string;
-  
-  // Export
   export(config: ContentConfig, outputDir: string): string[];
 }
-```
-
-### Adapter Components
-
-1. **Headless Engine** — runs the game logic without any UI
-2. **AI Player Strategies** — algorithmic players (greedy, aggressive, conservative) that make decisions deterministically
-3. **Batch Simulator** — runs N games × M strategies, aggregates statistics
-4. **Statistics Module** — win rates, entropy, usage rates, exploit detection
-
-The AI players are **not LLMs** — they're simple algorithmic strategies (e.g., "discard the tile furthest from winning"). They need to be consistent, not smart. The goal is measuring **relative differences between content configurations**, not optimal play.
-
----
-
-## Execution Flow
-
-```
-1. Human writes game_design.md
-2. Producer reads it → generates execution_plan.json
-3. Human reviews plan → approves / edits
-4. Translator converts plan → runnable multi-agent code for chosen framework
-5. For each round:
-   a. Show round summary to human
-   b. For each task in round:
-      - Assign to agent (designer / implementer / playtester)
-      - Run dev loop until acceptance criteria met or max iterations
-      - Commit code after each implementation cycle
-   c. Round complete → human playtests → approves to proceed
-6. Game deployed
-```
-
-### Example: HU Development Timeline
-
-```
-Round 1: Core Engine (Week 1)
-  1.1 Tile system          → Implementer builds, Playtester verifies unit tests
-  1.2 Win detection + fans → Implementer builds, Playtester runs test cases
-  1.3 Basic UI             → Implementer builds, Playtester plays via browser
-  → Human plays one hand ✅
-
-Round 2: Roguelike Loop (Week 2)
-  2.1 Ante/Blind system    → Implementer builds
-  2.2 Shop system          → Implementer builds
-  2.3 God tile design      → Designer creates 28 tiles as JSON
-  2.4 God tile effects     → Implementer codes effects
-  → Human plays Ante 1-3 ✅
-
-Round 3: Adapter (Week 3, first half)
-  3.1 Headless wrapper     → Implementer builds
-  3.2 AI strategies        → Implementer builds 4 strategy profiles
-  3.3 Batch simulator      → Implementer builds
-  → 1000-game batch completes in <60s ✅
-
-Round 4: Balance (Week 3, second half)
-  4.1 Balance iteration    → Designer analyzes stats, tweaks values
-  4.2 Exploit detection    → Playtester tries to break the game
-  → 3 clean batch runs ✅
-
-Round 5: Polish & Deploy (Week 4)
-  5.1 Animations + sound   → Implementer adds polish
-  5.2 YouTube Playable     → Implementer packages and deploys
-  → Live on YouTube Playables ✅
 ```
 
 ---
 
 ## Design Principles
 
-1. **Human-in-the-loop**: GameForge never auto-proceeds past a milestone. Every round requires human approval.
+1. **One continuous loop**: No artificial rounds or task assignments. Three agents cycle freely toward milestones.
 
-2. **Feedback drives routing**: Playtester categorizes issues (bug → Implementer, design problem → Designer). The loop self-organizes.
+2. **Milestones, not tasks**: Producer defines where to go (exit criteria), not how to get there. Agents self-organize.
 
-3. **Adapter is earned, not assumed**: Not every game needs statistical balancing. The Producer decides, and the adapter is built as an explicit round.
+3. **Human-in-the-loop at milestones**: GameForge pauses at every milestone for human review. Never auto-proceeds.
 
-4. **Execution plan is the contract**: Everything is specified upfront — agents, models, context, criteria. No ambiguity during execution.
+4. **Feedback drives routing**: Playtester categorizes issues → automatically routed to the right agent. The loop self-organizes.
 
-5. **Game-agnostic framework**: The four layers (Producer, Translator, Dev Loop, Adapter) work for any game genre. Only the adapter internals are game-specific.
+5. **Adapter is emergent**: Not pre-built. When agents need batch testing, they build it themselves. The milestone hints at this but doesn't mandate it.
 
-6. **Runtime-agnostic orchestration**: The execution plan is framework-independent. Swap AutoGen for CrewAI or LangGraph by changing the Translator — everything else stays the same.
+6. **Runtime-agnostic**: The execution plan is framework-independent. Swap AutoGen for CrewAI by changing the Translator — everything else stays the same.
+
+7. **Execution plan is the contract**: Agent configs, milestones, and exit criteria are all specified upfront. No ambiguity during execution.
+
+---
+
+## Example: Building HU
+
+```
+Human: "Here's game_design.md for HU, a roguelike mahjong deck-builder"
+
+Producer → execution_plan.json:
+  - 4 milestones: Playable Hand → Roguelike Loop → Content Balance → Ship It
+  - 3 agent configs with system contexts
+  - adapter_hint on Milestone 3
+
+Translator (AutoGen) → generates runnable GroupChat code
+
+=== Milestone 1: Playable Hand ===
+
+Designer: "Let me define the tile system and fan scoring rules..."
+  → outputs tile_spec.json, fan_table.json
+Implementer: reads specs, builds tiles.ts, win-detector.ts, fan-scorer.ts, GameScene.ts
+Playtester: plays in browser
+  → "BUG: 国士无双 not detected when I have all terminals + honors"
+Implementer: fixes win detector
+Playtester: plays again
+  → "PASS ✅ All 3 win forms work, scoring correct"
+
+→ Human review: plays a hand, looks good ✅ proceed
+
+=== Milestone 2: Roguelike Loop ===
+
+Designer: "Here's the ante/blind system, shop, 28 god tiles, 32 flower cards..."
+Implementer: builds progression, shop, god tile effects
+Playtester: plays Ante 1-3
+  → "BUG: gold doesn't reset between runs"
+Implementer: fixes
+Playtester: plays again
+  → "BORING: I just buy the cheapest god tiles and win easily"
+Designer: rethinks pricing, adds bond synergy requirements
+Implementer: implements changes
+Playtester: plays again
+  → "PASS ✅ Feels like a roguelike now"
+
+→ Human review: plays through Ante 5, good progression ✅ proceed
+
+=== Milestone 3: Content Balance ===
+
+Designer: "We need statistical data. Let's build a headless adapter."
+Implementer: builds headless-engine.ts, ai-player.ts, batch-sim.ts
+Playtester: runs 1000 games
+  → "TOO_EASY: Ante 1-4 win rate >85%. Gamble bond dominates (70% of builds)"
+Designer: nerfs gamble bond, buffs vision/transform
+Implementer: updates values
+Playtester: runs 1000 games again
+  → "Better. But 翡翠 tile + 赌博第3张 = infinite gold exploit"
+Implementer: adds gold cap per turn
+Playtester: runs 1000 games
+  → "PASS ✅ All targets met, entropy 1.6, no exploits"
+
+→ Human review: checks stats, runs a few games manually ✅ proceed
+
+=== Milestone 4: Ship It ===
+
+Designer: "Add win animations, tile flip effects, shop transition"
+Implementer: adds polish, packages for YouTube Playables
+Playtester: final playthrough on mobile
+  → "BUG: touch target too small on god tiles in shop"
+Implementer: increases hit area
+Playtester: "PASS ✅"
+
+→ Human review: final playthrough ✅ deploy 🎉
+```
 
 ---
 
 ## Open Questions
 
-1. **Playtester vision**: For UI playtest mode, how does the agent observe the game? Screenshot analysis? DOM inspection? Game state API?
+1. **Agent memory**: As the codebase grows, how do agents maintain context? Persistent sessions? RAG over the repo? Summarized state passed each turn?
 
-2. **Implementer context window**: Large codebases may exceed context limits. Should each task get a fresh agent with only relevant files, or maintain a persistent session?
+2. **Playtester vision**: For UI playtest mode, how does the agent observe the game? Screenshot + vision model? DOM inspection? Game state API exposed to browser console?
 
-3. **Designer-Implementer handoff**: Should the Designer output be a strict JSON schema (Implementer follows exactly) or a natural language spec (Implementer has creative freedom)?
+3. **Conflict resolution**: What if Designer and Playtester disagree? ("This is intentionally hard" vs "This is unfairly hard") Who wins? Escalate to human?
 
-4. **Cross-round state**: When Round 4 balance tweaks affect Round 2 code, how do we handle regressions? Run Round 2 exit criteria as a regression test?
+4. **Parallel work**: Can Designer spec the next feature while Implementer is still coding the current one? Or strictly sequential turns?
 
-5. **Parallel tasks**: Within a round, independent tasks (e.g., 2.1 and 2.3) could run in parallel. Should the Producer mark parallelizable tasks?
+5. **Cost control**: With free-form agent communication, token usage is unpredictable. Should there be per-milestone budgets?
 
-6. **Cost control**: With multiple agents running loops, LLM costs can escalate. Should the execution plan include per-task token budgets?
+6. **Regression testing**: When changes for Milestone 3 break Milestone 1 functionality, how is this detected? Automated test suite built incrementally?
 
 ---
 
@@ -602,4 +465,4 @@ Round 5: Polish & Deploy (Week 4)
 |------|--------|--------|
 | 2026-03-08 | HU Dev Agent | Initial draft (HU-specific pipeline) |
 | 2026-03-10 | Friday | Refactored to game-agnostic framework with GameAdapter |
-| 2026-03-10 | Friday + Zhilong | Complete redesign: Producer → Dev Loop → Adapter architecture |
+| 2026-03-10 | Friday + Zhilong | Redesigned: Producer → Translator → continuous Dev Loop with milestones |
