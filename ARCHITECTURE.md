@@ -205,30 +205,42 @@ The Playtester is **algorithmic, not LLM-based**:
 
 ```
 gameforge/
+├── src/gameforge/           # Main package (src layout)
+│   ├── __init__.py
+│   ├── cli.py               # CLI entry point
+│   ├── producer/            # GDD parser → milestone plan
+│   │   └── producer.py
+│   ├── agents/              # AutoGen agents
+│   │   ├── designer.py
+│   │   ├── critic.py
+│   │   ├── coder.py
+│   │   └── balancer.py
+│   ├── orchestrator/        # LangGraph workflow
+│   │   ├── graph.py         # Workflow definition
+│   │   └── state.py         # Global state schema
+│   ├── simulator/           # Game engine & playtesting
+│   │   ├── game_engine.py
+│   │   ├── strategies.py    # AI player strategies (greedy)
+│   │   └── runner.py        # Run N simulations
+│   ├── translator/          # Execution plan → framework adapter
+│   │   └── autogen_translator.py
+│   ├── eval/                # Metrics & reporting
+│   │   ├── metrics.py
+│   │   └── report.py
+│   ├── models/              # Pydantic data models
+│   │   └── plan.py          # ExecutionPlan, Milestone, Task
+│   └── tools/               # LLM & file I/O utilities
+│       └── llm.py
+├── tests/                   # Unit & integration tests
+│   └── test_producer.py
+├── examples/                # Example GDDs
+│   └── hu/
+│       └── game_design.md
+├── docs/                    # Documentation
 ├── ARCHITECTURE.md          # This file
-├── producer/
-│   ├── producer.py          # GDD parser → milestone plan
-│   └── planner.py           # Task dependency graph
-├── agents/
-│   ├── designer.py          # AutoGen Designer agent
-│   ├── critic.py            # AutoGen Critic agent
-│   ├── coder.py             # AutoGen Coder agent
-│   └── balancer.py          # AutoGen Balancer agent
-├── orchestrator/
-│   ├── graph.py             # LangGraph workflow definition
-│   └── state.py             # Global state schema
-├── simulator/
-│   ├── game_engine.py       # Core game logic (mahjong)
-│   ├── strategies.py        # AI player strategies (greedy)
-│   └── runner.py            # Run N simulations
-├── translator/
-│   └── autogen_translator.py # Translate execution plan → AutoGen config
-├── eval/
-│   ├── metrics.py           # Balance metrics
-│   └── report.py            # Generate playtest reports
-└── games/
-    └── hu/
-        └── game_design.md   # HU's GDD
+├── README.md
+├── pyproject.toml           # Project config (hatch)
+└── .gitignore
 ```
 
 ---
