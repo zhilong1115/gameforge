@@ -1,7 +1,11 @@
 """Data models for GameForge execution plans."""
 
 from enum import Enum
+
 from pydantic import BaseModel, Field
+
+
+# ── Enums ──
 
 
 class TaskStatus(str, Enum):
@@ -19,17 +23,36 @@ class AgentRole(str, Enum):
     PLAYTESTER = "playtester"
 
 
+# ── Agent Config ──
+
+
+class AgentConfig(BaseModel):
+    """Per-agent config within a task."""
+
+    role: AgentRole
+    model: str = "default"  # references key in llm_config.json
+    temperature: float = 0.7
+    max_rounds: int = 10  # max AutoGen conversation rounds
+    system_prompt: str = ""  # additional prompt injection
+
+
+# ── Task ──
+
+
 class Task(BaseModel):
-    """A single task within a milestone."""
+    """A single task within a milestone, executed as an AutoGen GroupChat."""
 
     id: str = Field(description="Unique task ID, e.g. '1.1'")
     title: str = Field(description="Short task description")
     description: str = Field(default="", description="Detailed task spec")
     depends_on: list[str] = Field(default_factory=list, description="Task IDs this depends on")
-    primary_agent: AgentRole = Field(default=AgentRole.DESIGNER, description="Primary agent for this task")
+    agents: list[AgentConfig] = Field(default_factory=list, description="Agents participating in this task")
+    max_iterations: int = Field(default=5, description="Max design-code-test cycles")
     status: TaskStatus = Field(default=TaskStatus.PENDING)
-    iterations: int = Field(default=0, description="How many design-code-test cycles this task took")
-    max_iterations: int = Field(default=5, description="Max iterations before escalating to human")
+    iterations: int = Field(default=0, description="Current iteration count")
+
+
+# ── Playtest ──
 
 
 class PlaytestCriteria(BaseModel):
@@ -37,16 +60,20 @@ class PlaytestCriteria(BaseModel):
 
     description: str = Field(description="What must be true to pass")
     metric: str | None = Field(default=None, description="Metric to check, e.g. 'win_rate'")
-    threshold: float | None = Field(default=None, description="Min value to pass")
+    threshold: float | None = Field(default=None, description="Value to compare against")
     operator: str = Field(default=">=", description="Comparison: >=, <=, ==, >, <")
 
 
+# ── Milestone ──
+
+
 class Milestone(BaseModel):
-    """A milestone containing ordered tasks and playtest criteria."""
+    """A milestone — executed as a LangGraph node containing multiple AutoGen tasks."""
 
     id: str = Field(description="Milestone ID, e.g. '1'")
     title: str = Field(description="Milestone title")
     description: str = Field(default="", description="What this milestone achieves")
+    programming_language: str = Field(default="python", description="Language for code generation in this milestone")
     tasks: list[Task] = Field(default_factory=list)
     playtest_criteria: list[PlaytestCriteria] = Field(default_factory=list)
     status: TaskStatus = Field(default=TaskStatus.PENDING)
@@ -54,12 +81,40 @@ class Milestone(BaseModel):
     human_feedback: str = Field(default="", description="Feedback from human review")
 
 
-class ExecutionPlan(BaseModel):
-    """Full execution plan parsed from a GDD."""
+# ── Game Config ──
 
+
+class GameConfig(BaseModel):
+    """Game metadata — passed as system context to all agents."""
+
+    # Basic info
     game_name: str
     gdd_path: str
-    gdd_content: str = Field(default="", description="Raw GDD markdown content")
+    game_type: str = Field(description="e.g. 'roguelike', 'deck-builder', 'RPG'")
+    description: str = Field(default="", description="One-line game description")
+    supported_languages: list[str] = Field(default=["en"], description="e.g. ['en', 'zh', 'ja']")
+
+    # Technical info
+    target_platforms: list[str] = Field(description="e.g. ['web', 'mobile', 'desktop']")
+    game_framework: str = Field(default="", description="e.g. 'phaser', 'pygame', 'godot'")
+    art_style: str = Field(default="", description="e.g. 'pixel', '3d', '2d-cartoon', 'ascii'")
+    output_dir: str = Field(default="./output", description="Where generated code goes")
+
+
+# ── Execution Plan ──
+
+
+class ExecutionPlan(BaseModel):
+    """Full execution plan generated from a GDD. This is the central JSON artifact."""
+
+    # Game config (system context for all agents)
+    game: GameConfig
+
+    # Config paths
+    llm_config_path: str = Field(default="./llm_config.json", description="Path to LLM credentials config")
+    custom_skills_dir: str | None = Field(default=None, description="Path to user-provided skills directory")
+
+    # Milestones
     milestones: list[Milestone] = Field(default_factory=list)
     current_milestone_idx: int = Field(default=0)
 
