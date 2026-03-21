@@ -103,11 +103,20 @@ class GameConfig(BaseModel):
 
 # ── Execution Plan ──
 
+# Note: ExecutionPlan is kept for backwards compatibility and overview,
+# but the primary output format is now:
+#   - gdd_normalized.md (system prompt for all agents)
+#   - milestone_N.json (one per milestone, each is an AutoGen GroupChat config)
+
 
 class ExecutionPlan(BaseModel):
-    """Full execution plan generated from a GDD. This is the central JSON artifact."""
+    """Overview of all milestones. Used for planning, not execution.
+    
+    For execution, each Milestone is saved as a separate JSON file
+    and the normalized GDD.md serves as shared system context.
+    """
 
-    # Game config (system context for all agents)
+    # Game config (extracted from GDD, used for overview)
     game: GameConfig
 
     # Config paths
@@ -127,3 +136,20 @@ class ExecutionPlan(BaseModel):
     @property
     def is_complete(self) -> bool:
         return all(m.status == TaskStatus.DONE for m in self.milestones)
+
+    def save_milestones(self, output_dir: str = "./output") -> list[str]:
+        """Save each milestone as a separate JSON file.
+        
+        Returns list of file paths created.
+        """
+        from pathlib import Path
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        paths = []
+        for m in self.milestones:
+            filename = f"milestone_{m.id}_{m.title.lower().replace(' ', '_')}.json"
+            filepath = out / filename
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(m.model_dump_json(indent=2))
+            paths.append(str(filepath))
+        return paths

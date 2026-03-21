@@ -1,0 +1,77 @@
+{
+  "id": "3",
+  "title": "Balance and Polish",
+  "description": "Tune difficulty, balance god tiles, ensure viable strategies",
+  "programming_language": "typescript",
+  "tasks": [
+    {
+      "id": "3.1",
+      "title": "Difficulty tuning",
+      "description": "Adjust score targets, shop prices, god tile effects for target win rates",
+      "depends_on": [],
+      "agents": [
+        {
+          "role": "balancer",
+          "model": "default",
+          "temperature": 0.5,
+          "max_rounds": 10,
+          "system_prompt": ""
+        },
+        {
+          "role": "critic",
+          "model": "default",
+          "temperature": 0.3,
+          "max_rounds": 10,
+          "system_prompt": ""
+        }
+      ],
+      "max_iterations": 5,
+      "status": "pending",
+      "iterations": 0
+    },
+    {
+      "id": "3.2",
+      "title": "Strategy viability check",
+      "description": "Ensure 4+ viable build strategies through mass simulation",
+      "depends_on": [
+        "3.1"
+      ],
+      "agents": [
+        {
+          "role": "balancer",
+          "model": "default",
+          "temperature": 0.5,
+          "max_rounds": 10,
+          "system_prompt": ""
+        },
+        {
+          "role": "critic",
+          "model": "default",
+          "temperature": 0.3,
+          "max_rounds": 10,
+          "system_prompt": ""
+        }
+      ],
+      "max_iterations": 5,
+      "status": "pending",
+      "iterations": 0
+    }
+  ],
+  "playtest_criteria": [
+    {
+      "description": "Early ante win rate 65-80%",
+      "metric": "ante_1_2_win_rate",
+      "threshold": 0.65,
+      "operator": ">="
+    },
+    {
+      "description": "No single god tile >90% purchase rate",
+      "metric": "max_god_tile_purchase_rate",
+      "threshold": 0.9,
+      "operator": "<"
+    }
+  ],
+  "status": "pending",
+  "human_approved": null,
+  "human_feedback": ""
+}

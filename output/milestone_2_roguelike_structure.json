@@ -1,0 +1,119 @@
+{
+  "id": "2",
+  "title": "Roguelike Structure",
+  "description": "Add progression: antes, blinds, shops, and god tiles",
+  "programming_language": "typescript",
+  "tasks": [
+    {
+      "id": "2.1",
+      "title": "Ante and blind system",
+      "description": "Implement 8 antes with 3 blinds each, scaling targets",
+      "depends_on": [],
+      "agents": [
+        {
+          "role": "designer",
+          "model": "default",
+          "temperature": 0.7,
+          "max_rounds": 10,
+          "system_prompt": ""
+        },
+        {
+          "role": "coder",
+          "model": "default",
+          "temperature": 0.3,
+          "max_rounds": 10,
+          "system_prompt": ""
+        },
+        {
+          "role": "critic",
+          "model": "default",
+          "temperature": 0.3,
+          "max_rounds": 10,
+          "system_prompt": ""
+        }
+      ],
+      "max_iterations": 5,
+      "status": "pending",
+      "iterations": 0
+    },
+    {
+      "id": "2.2",
+      "title": "Shop and economy",
+      "description": "Implement shop phase: buying god tiles, flower cards, gold management",
+      "depends_on": [
+        "2.1"
+      ],
+      "agents": [
+        {
+          "role": "designer",
+          "model": "default",
+          "temperature": 0.7,
+          "max_rounds": 10,
+          "system_prompt": ""
+        },
+        {
+          "role": "coder",
+          "model": "default",
+          "temperature": 0.3,
+          "max_rounds": 10,
+          "system_prompt": ""
+        },
+        {
+          "role": "critic",
+          "model": "default",
+          "temperature": 0.3,
+          "max_rounds": 10,
+          "system_prompt": ""
+        }
+      ],
+      "max_iterations": 5,
+      "status": "pending",
+      "iterations": 0
+    },
+    {
+      "id": "2.3",
+      "title": "God tiles and flower cards",
+      "description": "Implement passive abilities (god tiles) and consumables (flower cards)",
+      "depends_on": [
+        "2.1"
+      ],
+      "agents": [
+        {
+          "role": "designer",
+          "model": "default",
+          "temperature": 0.7,
+          "max_rounds": 10,
+          "system_prompt": ""
+        },
+        {
+          "role": "coder",
+          "model": "default",
+          "temperature": 0.3,
+          "max_rounds": 10,
+          "system_prompt": ""
+        },
+        {
+          "role": "critic",
+          "model": "default",
+          "temperature": 0.3,
+          "max_rounds": 10,
+          "system_prompt": ""
+        }
+      ],
+      "max_iterations": 5,
+      "status": "pending",
+      "iterations": 0
+    }
+  ],
+  "playtest_criteria": [
+    {
+      "description": "Can play through all 8 antes",
+      "metric": "full_run_completion",
+      "threshold": 0.8,
+      "operator": ">="
+    }
+  ],
+  "status": "pending",
+  "human_approved": null,
+  "human_feedback": ""
+}

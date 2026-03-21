@@ -190,6 +190,59 @@ def produce(gdd_path: str, llm_fn=None, output_path: str | None = None) -> Execu
     return plan
 
 
+def produce_full(
+    gdd_path: str,
+    output_dir: str = "./output",
+    llm_fn=None,
+) -> tuple[str, list[str]]:
+    """Full pipeline: normalize GDD → generate milestones → save all files.
+    
+    Output:
+        - output_dir/gdd_normalized.md (system prompt for agents)
+        - output_dir/milestone_1_*.json (one per milestone)
+    
+    Args:
+        gdd_path: Path to user's raw GDD
+        output_dir: Where to save all output files
+        llm_fn: Optional LLM callable
+    
+    Returns:
+        Tuple of (normalized_gdd_path, list_of_milestone_paths)
+    """
+    from gameforge.producer.normalizer import normalize_gdd
+    
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    
+    # Step 1: Read and normalize GDD
+    gdd_content = read_gdd(gdd_path)
+    gdd_normalized_path = str(out / "gdd_normalized.md")
+    normalize_gdd(gdd_content, output_path=gdd_normalized_path, llm_fn=llm_fn)
+    
+    # Step 2: Generate plan (template or LLM)
+    if llm_fn:
+        plan = generate_plan_with_llm(gdd_content, gdd_path, llm_fn)
+    else:
+        plan = produce_from_template(gdd_path)
+    
+    # Step 3: Save each milestone as separate JSON
+    milestone_paths = plan.save_milestones(output_dir)
+    
+    # Step 4: Also save overview (for reference, not execution)
+    overview_path = str(out / "plan_overview.json")
+    with open(overview_path, "w", encoding="utf-8") as f:
+        f.write(plan.model_dump_json(indent=2))
+    
+    print(f"\nProducer output ({output_dir}):")
+    print(f"  System prompt: {gdd_normalized_path}")
+    print(f"  Milestones: {len(milestone_paths)} files")
+    for p in milestone_paths:
+        print(f"    - {p}")
+    print(f"  Overview: {overview_path}")
+    
+    return gdd_normalized_path, milestone_paths
+
+
 # ── Fallback: Rule-based plan generation (no LLM needed) ──
 
 def produce_from_template(gdd_path: str, output_path: str | None = None) -> ExecutionPlan:
