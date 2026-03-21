@@ -1,0 +1,141 @@
+{
+  "game": {
+    "game_name": "HU - Roguelike Mahjong Deck-Builder",
+    "gdd_path": "examples/hu/game_design.md",
+    "game_type": "roguelike, deck-builder",
+    "description": "A single-player roguelike where you play mahjong hands to clear score targets, with a shop for buying god tiles and flower cards.",
+    "supported_languages": [
+      "en"
+    ],
+    "target_platforms": [
+      "web",
+      "mobile"
+    ],
+    "game_framework": "phaser 3",
+    "art_style": "2d-cartoon",
+    "output_dir": "./output"
+  },
+  "llm_config_path": "./llm_config.json",
+  "custom_skills_dir": null,
+  "milestones": [
+    {
+      "id": "1",
+      "title": "Initial Playable Hand System",
+      "description": "Implement core mahjong hand mechanics and scoring, with basic win forms.",
+      "programming_language": "typescript",
+      "tasks": [
+        {
+          "id": "1.1",
+          "title": "Define Tile Types and Basic Gameplay Logic",
+          "description": "Design tile types (numbers, winds, dragons) and implement basic gameplay logic to draw 14 tiles and discard.",
+          "depends_on": [],
+          "agents": [
+            {
+              "role": "designer",
+              "model": "default",
+              "temperature": 0.7,
+              "max_rounds": 15,
+              "system_prompt": "Design the tile types (numbers, winds, dragons) and define their properties in a way that supports the core gameplay mechanics."
+            }
+          ],
+          "max_iterations": 5,
+          "status": "pending",
+          "iterations": 0
+        },
+        {
+          "id": "1.2",
+          "title": "Implement Winning Hands and Scoring Mechanics",
+          "description": "Implement the logic for winning hands, including calculating scores based on fan patterns.",
+          "depends_on": [
+            "1.1"
+          ],
+          "agents": [
+            {
+              "role": "designer",
+              "model": "default",
+              "temperature": 0.7,
+              "max_rounds": 15,
+              "system_prompt": "Define the logic for winning hands and scoring, including basic fan patterns."
+            },
+            {
+              "role": "coder",
+              "model": "default",
+              "temperature": 0.8,
+              "max_rounds": 20,
+              "system_prompt": "Implement the logic for winning hands and calculating scores based on fan patterns."
+            }
+          ],
+          "max_iterations": 5,
+          "status": "pending",
+          "iterations": 0
+        },
+        {
+          "id": "1.3",
+          "title": "Create Basic User Interface",
+          "description": "Develop a basic user interface to display tiles, hand, and score.",
+          "depends_on": [
+            "1.2"
+          ],
+          "agents": [
+            {
+              "role": "designer",
+              "model": "default",
+              "temperature": 0.7,
+              "max_rounds": 15,
+              "system_prompt": "Design the user interface for displaying tiles, hands, and scores."
+            },
+            {
+              "role": "coder",
+              "model": "default",
+              "temperature": 0.8,
+              "max_rounds": 20,
+              "system_prompt": "Develop a basic user interface to display tiles, hand, and score using Phaser 3."
+            }
+          ],
+          "max_iterations": 5,
+          "status": "pending",
+          "iterations": 0
+        },
+        {
+          "id": "1.4",
+          "title": "Initial Playtest for Hand System",
+          "description": "Conduct initial playtests to ensure the basic mahjong hand mechanics work as intended.",
+          "depends_on": [
+            "1.3"
+          ],
+          "agents": [
+            {
+              "role": "playtester",
+              "model": "default",
+              "temperature": 0.7,
+              "max_rounds": 15,
+              "system_prompt": "Run initial playtests to ensure the basic mahjong hand mechanics work as intended."
+            },
+            {
+              "role": "balancer",
+              "model": "default",
+              "temperature": 0.8,
+              "max_rounds": 20,
+              "system_prompt": "Analyze early playtest data and propose adjustments if necessary."
+            }
+          ],
+          "max_iterations": 5,
+          "status": "pending",
+          "iterations": 0
+        }
+      ],
+      "playtest_criteria": [
+        {
+          "description": "Player can form basic winning hands",
+          "metric": "win rate",
+          "threshold": 0.6,
+          "operator": ">="
+        }
+      ],
+      "status": "pending",
+      "human_approved": null,
+      "human_feedback": ""
+    }
+  ],
+  "current_milestone_idx": 0
+}
