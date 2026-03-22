@@ -26,6 +26,7 @@ dev = [
 
 [project.scripts]
 gameforge = "gameforge.cli:main"
+gf = "gameforge.cli:main"
 
 [build-system]
 requires = ["hatchling"]
