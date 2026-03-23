@@ -44,39 +44,7 @@ GameForge requires two things from the user:
 A markdown file describing the game. Can be rough — the Normalizer fills in gaps. Minimum viable GDD needs: game name, core mechanic, and target platform.
 
 #### LLM API Configuration (`llm_config.json`)
-Specifies which LLM providers and models to use for each agent role:
-
-```json
-{
-  "default": {
-    "provider": "anthropic",
-    "model": "claude-sonnet-4-20250514",
-    "api_key": "${ANTHROPIC_API_KEY}",
-    "temperature": 0.7
-  },
-  "fast": {
-    "provider": "openai",
-    "model": "gpt-4o-mini",
-    "api_key": "${OPENAI_API_KEY}",
-    "temperature": 0.3
-  },
-  "local": {
-    "provider": "ollama",
-    "model": "qwen2.5:7b",
-    "base_url": "http://localhost:11434",
-    "temperature": 0.7
-  }
-}
-```
-
-Each `AgentConfig` references a key from this file (e.g. `model: "default"` or `model: "fast"`). This decouples agent logic from LLM provider — swap models without changing the plan.
-
-The `ExecutionPlan` stores the config path:
-```python
-class ExecutionPlan(BaseModel):
-    llm_config_path: str = "./llm_config.json"
-    custom_skills_dir: str | None = None  # optional user-provided tools
-```
+Defines available LLM providers (Anthropic, OpenAI, Ollama, etc.). Each agent's `model` field references a key from this file, decoupling agent logic from LLM provider. See **Section 5.1** for the complete format.
 
 ---
 
@@ -180,77 +148,9 @@ The system validates the milestone DAG at plan creation:
 2. **Mirror consistency** — if A.next contains B, then B.prerequisites must contain A
 3. **Cycle detection** — topological sort (Kahn's algorithm) to ensure no circular dependencies
 
-#### 3.1.4 Milestone Config (JSON)
+#### 3.1.4 Milestone Config
 
-Each milestone is saved as a self-contained JSON file that doubles as an AutoGen GroupChat configuration. Example `milestone_1_core_game_loop.json`:
-
-```json
-{
-  "id": "1",
-  "title": "Core Game Loop",
-  "description": "Minimum playable version: basic game round from start to scoring",
-  "prerequisites": [],
-  "next": ["2", "3"],
-  "programming_language": "typescript",
-  "agents": [
-    {
-      "role": "designer",
-      "model": "default",
-      "temperature": 0.7,
-      "system_prompt": "Design data structures, game rules, and core mechanics for a mahjong game"
-    },
-    {
-      "role": "coder",
-      "model": "default",
-      "temperature": 0.3,
-      "system_prompt": "Implement the game logic from design specs in TypeScript"
-    },
-    {
-      "role": "playtester",
-      "model": "default",
-      "temperature": 0.0,
-      "system_prompt": "Run game simulations via tool calls and report statistics"
-    },
-    {
-      "role": "critic",
-      "model": "fast",
-      "temperature": 0.3,
-      "system_prompt": "Review designs, code, and playtest results for correctness"
-    }
-  ],
-  "speaker_order": ["designer", "critic", "coder", "critic", "playtester", "critic"],
-  "manager_model": "default",
-  "max_rounds": 20,
-  "max_iterations": 5,
-  "iterations": 0,
-  "playtest_criteria": [
-    {
-      "description": "Can complete a basic game round from deal to scoring",
-      "metric": "completion_rate",
-      "threshold": 1.0,
-      "operator": ">="
-    }
-  ],
-  "status": "pending",
-  "human_approved": null,
-  "human_feedback": ""
-}
-```
-
-Key fields explained:
-
-| Field | Purpose |
-|-------|---------|
-| `prerequisites` / `next` | DAG edges — defines execution order and parallelism |
-| `agents` | AutoGen agents in this GroupChat; each references an LLM config key via `model` |
-| `agents[].system_prompt` | Milestone-specific instructions injected into the agent's prompt |
-| `speaker_order` | Defines the AutoGen conversation flow (who speaks in what order) |
-| `manager_model` | LLM config key for the AutoGen GroupChatManager (decides speaker transitions) |
-| `max_rounds` | Max conversation rounds in the GroupChat — controls cost |
-| `max_iterations` | Max design→code→test retry cycles before escalating to human |
-| `playtest_criteria` | Measurable conditions that must pass for the milestone to complete |
-| `human_approved` | `null` = not reviewed, `true` = approved, `false` = rejected |
-| `human_feedback` | Human's notes when rejecting — fed back to agents on retry |
+Each milestone is saved as a self-contained JSON file that doubles as an AutoGen GroupChat configuration. See **Section 5.3** for the complete config reference with all fields and examples.
 
 ### 3.2 Producer (Planning Phase)
 
@@ -426,7 +326,168 @@ Converts the abstract execution plan into framework-specific configurations:
 
 ---
 
-## 5. Project Structure
+## 5. Configuration Reference
+
+This section shows the complete configuration files that drive GameForge.
+
+### 5.1 LLM Configuration (`llm_config.json`)
+
+Defines available LLM providers. Each agent references a key from this file via its `model` field.
+
+```json
+{
+  "default": {
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-20250514",
+    "api_key": "${ANTHROPIC_API_KEY}",
+    "temperature": 0.7,
+    "max_tokens": 8192
+  },
+  "fast": {
+    "provider": "openai",
+    "model": "gpt-4o-mini",
+    "api_key": "${OPENAI_API_KEY}",
+    "temperature": 0.3,
+    "max_tokens": 4096
+  },
+  "strong": {
+    "provider": "anthropic",
+    "model": "claude-opus-4-20250514",
+    "api_key": "${ANTHROPIC_API_KEY}",
+    "temperature": 0.5,
+    "max_tokens": 16384
+  },
+  "local": {
+    "provider": "ollama",
+    "model": "qwen2.5:7b",
+    "base_url": "http://localhost:11434",
+    "temperature": 0.7
+  }
+}
+```
+
+### 5.2 Execution Plan (`plan_overview.json`)
+
+The top-level plan that references all milestones.
+
+```json
+{
+  "game": {
+    "game_name": "HU",
+    "gdd_path": "examples/hu/game_design.md",
+    "game_type": "roguelike deck-builder mahjong",
+    "description": "Balatro-inspired mahjong roguelike",
+    "supported_languages": ["en", "zh"],
+    "target_platforms": ["web", "mobile"],
+    "game_framework": "phaser",
+    "art_style": "2d",
+    "output_dir": "./output"
+  },
+  "llm_config_path": "./llm_config.json",
+  "custom_skills_dir": null,
+  "milestones": [
+    { "id": "1", "title": "Core Game Loop", "..." : "..." },
+    { "id": "2", "title": "Roguelike Structure", "..." : "..." },
+    { "id": "3", "title": "UI & Rendering", "..." : "..." },
+    { "id": "4", "title": "Balance & Polish", "..." : "..." }
+  ]
+}
+```
+
+### 5.3 Milestone Configuration (`milestone_1_core_game_loop.json`)
+
+Each milestone is a self-contained file that doubles as an AutoGen GroupChat config. This is the **primary execution unit** — the orchestrator loads one milestone at a time.
+
+```json
+{
+  "id": "1",
+  "title": "Core Game Loop",
+  "description": "Minimum playable version: basic game round from start to scoring",
+  "prerequisites": [],
+  "next": ["2", "3"],
+  "programming_language": "typescript",
+
+  "agents": [
+    {
+      "role": "designer",
+      "model": "default",
+      "temperature": 0.7,
+      "system_prompt": "Design data structures, game rules, and core mechanics for a mahjong game. Output detailed specs with interfaces."
+    },
+    {
+      "role": "coder",
+      "model": "default",
+      "temperature": 0.3,
+      "system_prompt": "Implement the game logic from design specs in TypeScript. Write unit tests for all public functions."
+    },
+    {
+      "role": "playtester",
+      "model": "default",
+      "temperature": 0.0,
+      "system_prompt": "Run game simulations via tool calls. Report win rates, score distributions, and edge cases found."
+    },
+    {
+      "role": "critic",
+      "model": "fast",
+      "temperature": 0.3,
+      "system_prompt": "Review designs, code, and playtest results. Challenge assumptions, find edge cases, ensure completeness."
+    }
+  ],
+  "speaker_order": ["designer", "critic", "coder", "critic", "playtester", "critic"],
+  "manager_model": "default",
+  "max_rounds": 20,
+  "max_iterations": 5,
+  "iterations": 0,
+
+  "playtest_criteria": [
+    {
+      "description": "Can complete a basic game round from deal to scoring",
+      "metric": "completion_rate",
+      "threshold": 1.0,
+      "operator": ">="
+    },
+    {
+      "description": "No runtime errors in 100 simulated games",
+      "metric": "error_rate",
+      "threshold": 0.0,
+      "operator": "=="
+    }
+  ],
+
+  "status": "pending",
+  "human_approved": null,
+  "human_feedback": ""
+}
+```
+
+#### Field Reference
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Unique milestone identifier |
+| `title` | string | Human-readable name |
+| `description` | string | What this milestone achieves |
+| `prerequisites` | string[] | Milestone IDs that must be DONE before this can start |
+| `next` | string[] | Milestone IDs to unlock when this completes |
+| `programming_language` | string | Target language for code generation |
+| `agents` | AgentConfig[] | AutoGen agents participating in this GroupChat |
+| `agents[].role` | enum | `designer` / `coder` / `playtester` / `balancer` / `critic` |
+| `agents[].model` | string | Key from `llm_config.json` (e.g. `"default"`, `"fast"`) |
+| `agents[].temperature` | float | LLM temperature (0.0 = deterministic, 1.0 = creative) |
+| `agents[].system_prompt` | string | Milestone-specific instructions for this agent |
+| `speaker_order` | AgentRole[] | Conversation flow — who speaks in what sequence |
+| `manager_model` | string | LLM config key for AutoGen GroupChatManager |
+| `max_rounds` | int | Max conversation rounds (controls cost) |
+| `max_iterations` | int | Max design→code→test retry cycles |
+| `iterations` | int | Current retry count |
+| `playtest_criteria` | PlaytestCriteria[] | Measurable pass/fail conditions |
+| `status` | enum | `pending` → `ready` → `in_progress` → `done` / `failed` |
+| `human_approved` | bool? | `null` = not reviewed, `true` = approved, `false` = rejected |
+| `human_feedback` | string | Human notes on rejection — fed back to agents on retry |
+
+---
+
+## 6. Project Structure
 
 ```
 gameforge/
@@ -465,7 +526,7 @@ gameforge/
 
 ---
 
-## 6. Key Design Decisions
+## 7. Key Design Decisions
 
 | # | Decision | Rationale |
 |---|----------|-----------|
@@ -482,7 +543,7 @@ gameforge/
 
 ---
 
-## 7. Example: HU — Roguelike Mahjong Deck-Builder
+## 8. Example: HU — Roguelike Mahjong Deck-Builder
 
 The reference implementation uses HU, a Balatro-inspired mahjong roguelike.
 
@@ -533,7 +594,7 @@ The reference implementation uses HU, a Balatro-inspired mahjong roguelike.
 
 ---
 
-## 8. Technology Stack
+## 9. Technology Stack
 
 | Component | Technology | Why |
 |-----------|-----------|-----|
@@ -548,7 +609,7 @@ The reference implementation uses HU, a Balatro-inspired mahjong roguelike.
 
 ---
 
-## 9. Future Work
+## 10. Future Work
 
 - [ ] **Orchestrator implementation** — wire up LangGraph DAG execution with `ready_milestones()`
 - [ ] **AutoGen integration** — connect agent prompts to actual GroupChat sessions
