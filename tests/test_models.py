@@ -109,6 +109,8 @@ def test_milestone():
         id="1",
         title="Core Mahjong Round",
         programming_language="python",
+        prerequisites=[],
+        next=["2"],
         tasks=[
             Task(id="1.1", title="Tile data structures"),
             Task(id="1.2", title="Draw/discard logic"),
@@ -122,6 +124,14 @@ def test_milestone():
     assert m.programming_language == "python"
     assert m.status == TaskStatus.PENDING
     assert m.human_approved is None
+    assert m.prerequisites == []
+    assert m.next == ["2"]
+
+
+def test_milestone_defaults():
+    m = Milestone(id="1", title="Test")
+    assert m.prerequisites == []
+    assert m.next == []
 
 
 # ── ExecutionPlan ──
@@ -145,6 +155,91 @@ def test_execution_plan():
     assert plan.current_milestone is not None
     assert plan.current_milestone.title == "Core Round"
     assert not plan.is_complete
+
+
+def test_execution_plan_dag_valid():
+    """Diamond DAG: 1 → 2, 1 → 3, 2+3 → 4."""
+    plan = ExecutionPlan(
+        game=GameConfig(
+            game_name="HU", gdd_path="test.md",
+            game_type="roguelike", target_platforms=["web"],
+        ),
+        milestones=[
+            Milestone(id="1", title="Core Loop", prerequisites=[], next=["2", "3"]),
+            Milestone(id="2", title="UI", prerequisites=["1"], next=["4"]),
+            Milestone(id="3", title="Audio", prerequisites=["1"], next=["4"]),
+            Milestone(id="4", title="Polish", prerequisites=["2", "3"], next=[]),
+        ],
+    )
+    errors = plan.validate_dag()
+    assert errors == [], f"Unexpected errors: {errors}"
+
+
+def test_execution_plan_dag_mirror_error():
+    """A.next has B, but B.prerequisites doesn't have A."""
+    plan = ExecutionPlan(
+        game=GameConfig(
+            game_name="HU", gdd_path="test.md",
+            game_type="roguelike", target_platforms=["web"],
+        ),
+        milestones=[
+            Milestone(id="1", title="Core", next=["2"]),
+            Milestone(id="2", title="UI", prerequisites=[]),  # missing "1"
+        ],
+    )
+    errors = plan.validate_dag()
+    assert len(errors) > 0
+    assert any("mirror" in e or "prerequisites" in e for e in errors)
+
+
+def test_execution_plan_dag_cycle():
+    """A → B → A is a cycle."""
+    plan = ExecutionPlan(
+        game=GameConfig(
+            game_name="HU", gdd_path="test.md",
+            game_type="roguelike", target_platforms=["web"],
+        ),
+        milestones=[
+            Milestone(id="1", title="A", prerequisites=["2"], next=["2"]),
+            Milestone(id="2", title="B", prerequisites=["1"], next=["1"]),
+        ],
+    )
+    errors = plan.validate_dag()
+    assert any("Cycle" in e or "cycle" in e for e in errors)
+
+
+def test_execution_plan_ready_milestones():
+    """Only milestone 1 is ready initially; after 1 completes, 2 and 3 become ready."""
+    plan = ExecutionPlan(
+        game=GameConfig(
+            game_name="HU", gdd_path="test.md",
+            game_type="roguelike", target_platforms=["web"],
+        ),
+        milestones=[
+            Milestone(id="1", title="Core", prerequisites=[], next=["2", "3"]),
+            Milestone(id="2", title="UI", prerequisites=["1"], next=["4"]),
+            Milestone(id="3", title="Audio", prerequisites=["1"], next=["4"]),
+            Milestone(id="4", title="Polish", prerequisites=["2", "3"], next=[]),
+        ],
+    )
+    # Initially only milestone 1 is ready
+    ready = plan.ready_milestones()
+    assert [m.id for m in ready] == ["1"]
+
+    # After milestone 1 completes, 2 and 3 are ready
+    plan.milestones[0].status = TaskStatus.DONE
+    ready = plan.ready_milestones()
+    assert sorted(m.id for m in ready) == ["2", "3"]
+
+    # After 2 completes but not 3, milestone 4 is NOT ready
+    plan.milestones[1].status = TaskStatus.DONE
+    ready = plan.ready_milestones()
+    assert [m.id for m in ready] == ["3"]
+
+    # After both 2+3 complete, milestone 4 is ready
+    plan.milestones[2].status = TaskStatus.DONE
+    ready = plan.ready_milestones()
+    assert [m.id for m in ready] == ["4"]
 
 
 def test_execution_plan_complete():

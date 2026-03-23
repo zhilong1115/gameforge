@@ -68,11 +68,21 @@ class PlaytestCriteria(BaseModel):
 
 
 class Milestone(BaseModel):
-    """A milestone — executed as a LangGraph node containing multiple AutoGen tasks."""
+    """A milestone — executed as a LangGraph node containing multiple AutoGen tasks.
+    
+    DAG structure is defined by `prerequisites` and `next`:
+    - prerequisites: milestone IDs that must ALL complete before this one starts
+    - next: milestone IDs that this one unlocks when complete
+    
+    These should be mirrors of each other (if A.next contains B, then B.prerequisites contains A).
+    Use `ExecutionPlan.validate_dag()` to check consistency.
+    """
 
     id: str = Field(description="Milestone ID, e.g. '1'")
     title: str = Field(description="Milestone title")
     description: str = Field(default="", description="What this milestone achieves")
+    prerequisites: list[str] = Field(default_factory=list, description="Milestone IDs that must complete before this starts")
+    next: list[str] = Field(default_factory=list, description="Milestone IDs unlocked when this completes")
     programming_language: str = Field(default="python", description="Language for code generation in this milestone")
     tasks: list[Task] = Field(default_factory=list)
     playtest_criteria: list[PlaytestCriteria] = Field(default_factory=list)
@@ -136,6 +146,71 @@ class ExecutionPlan(BaseModel):
     @property
     def is_complete(self) -> bool:
         return all(m.status == TaskStatus.DONE for m in self.milestones)
+
+    def _milestone_map(self) -> dict[str, Milestone]:
+        """Build a quick lookup: milestone ID → Milestone."""
+        return {m.id: m for m in self.milestones}
+
+    def ready_milestones(self) -> list[Milestone]:
+        """Return milestones whose prerequisites are all DONE and that are still PENDING.
+        
+        These can be executed in parallel by LangGraph.
+        """
+        mm = self._milestone_map()
+        ready = []
+        for m in self.milestones:
+            if m.status != TaskStatus.PENDING:
+                continue
+            if all(mm[pid].status == TaskStatus.DONE for pid in m.prerequisites if pid in mm):
+                ready.append(m)
+        return ready
+
+    def validate_dag(self) -> list[str]:
+        """Validate DAG consistency. Returns list of errors (empty = valid).
+        
+        Checks:
+        1. All referenced milestone IDs exist
+        2. prerequisites and next are mirrors of each other
+        3. No cycles (topological sort)
+        """
+        errors = []
+        mm = self._milestone_map()
+        valid_ids = set(mm.keys())
+
+        # Check references exist
+        for m in self.milestones:
+            for pid in m.prerequisites:
+                if pid not in valid_ids:
+                    errors.append(f"Milestone '{m.id}' has unknown prerequisite '{pid}'")
+            for nid in m.next:
+                if nid not in valid_ids:
+                    errors.append(f"Milestone '{m.id}' has unknown next '{nid}'")
+
+        # Check mirror consistency: if A.next has B, then B.prerequisites has A
+        for m in self.milestones:
+            for nid in m.next:
+                if nid in mm and m.id not in mm[nid].prerequisites:
+                    errors.append(f"Milestone '{m.id}' lists '{nid}' in next, but '{nid}' doesn't list '{m.id}' in prerequisites")
+            for pid in m.prerequisites:
+                if pid in mm and m.id not in mm[pid].next:
+                    errors.append(f"Milestone '{m.id}' lists '{pid}' in prerequisites, but '{pid}' doesn't list '{m.id}' in next")
+
+        # Check no cycles (Kahn's algorithm)
+        in_degree = {m.id: len(m.prerequisites) for m in self.milestones}
+        queue = [mid for mid, deg in in_degree.items() if deg == 0]
+        visited = 0
+        while queue:
+            mid = queue.pop(0)
+            visited += 1
+            for nid in mm[mid].next:
+                if nid in in_degree:
+                    in_degree[nid] -= 1
+                    if in_degree[nid] == 0:
+                        queue.append(nid)
+        if visited != len(self.milestones):
+            errors.append("Cycle detected in milestone DAG")
+
+        return errors
 
     def save_milestones(self, output_dir: str = "./output") -> list[str]:
         """Save each milestone as a separate JSON file.

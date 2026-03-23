@@ -48,6 +48,8 @@ Your output must be valid JSON matching this schema:
       "id": "1",
       "title": "string",
       "description": "what this milestone achieves",
+      "prerequisites": [],
+      "next": ["2", "3"],
       "programming_language": "typescript",
       "tasks": [
         {{
@@ -302,12 +304,14 @@ def produce_from_template(gdd_path: str, output_path: str | None = None) -> Exec
         output_dir="./output",
     )
     
-    # Create default milestones
+    # Create default milestones (DAG: 1 → 2, 1 → 3, 2+3 → 4... but we only have 3 for now)
     milestones = [
         Milestone(
             id="1",
             title="Core Game Loop",
             description="Minimum playable version: basic game round from start to scoring",
+            prerequisites=[],
+            next=["2"],
             programming_language=language,
             tasks=[
                 Task(
@@ -353,6 +357,8 @@ def produce_from_template(gdd_path: str, output_path: str | None = None) -> Exec
             id="2",
             title="Roguelike Structure",
             description="Add progression: antes, blinds, shops, and god tiles",
+            prerequisites=["1"],
+            next=["3"],
             programming_language=language,
             tasks=[
                 Task(
@@ -400,6 +406,8 @@ def produce_from_template(gdd_path: str, output_path: str | None = None) -> Exec
             id="3",
             title="Balance and Polish",
             description="Tune difficulty, balance god tiles, ensure viable strategies",
+            prerequisites=["2"],
+            next=[],
             programming_language=language,
             tasks=[
                 Task(
