@@ -221,24 +221,28 @@ def test_execution_plan_ready_milestones():
             Milestone(id="4", title="Polish", prerequisites=["2", "3"], next=[]),
         ],
     )
-    # Initially only milestone 1 is ready
+    # Initially only milestone 1 is ready (promoted from PENDING → READY)
     ready = plan.ready_milestones()
     assert [m.id for m in ready] == ["1"]
+    assert plan.milestones[0].status == TaskStatus.READY
 
-    # After milestone 1 completes, 2 and 3 are ready
+    # After milestone 1 completes, 2 and 3 become ready
     plan.milestones[0].status = TaskStatus.DONE
     ready = plan.ready_milestones()
     assert sorted(m.id for m in ready) == ["2", "3"]
+    assert plan.milestones[1].status == TaskStatus.READY
+    assert plan.milestones[2].status == TaskStatus.READY
 
-    # After 2 completes but not 3, milestone 4 is NOT ready
+    # After 2 completes but not 3, milestone 4 is NOT ready (3 still READY, not DONE)
     plan.milestones[1].status = TaskStatus.DONE
     ready = plan.ready_milestones()
-    assert [m.id for m in ready] == ["3"]
+    assert [m.id for m in ready] == ["3"]  # 3 is still READY from before
 
-    # After both 2+3 complete, milestone 4 is ready
+    # After both 2+3 complete, milestone 4 becomes ready
     plan.milestones[2].status = TaskStatus.DONE
     ready = plan.ready_milestones()
     assert [m.id for m in ready] == ["4"]
+    assert plan.milestones[3].status == TaskStatus.READY
 
 
 def test_execution_plan_complete():

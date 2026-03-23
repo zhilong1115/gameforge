@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 class TaskStatus(str, Enum):
     PENDING = "pending"
+    READY = "ready"  # all prerequisites met, can be executed
     IN_PROGRESS = "in_progress"
     DONE = "done"
     FAILED = "failed"
@@ -145,16 +146,20 @@ class ExecutionPlan(BaseModel):
         return {m.id: m for m in self.milestones}
 
     def ready_milestones(self) -> list[Milestone]:
-        """Return milestones whose prerequisites are all DONE and that are still PENDING.
+        """Find milestones whose prerequisites are all DONE, mark them READY, and return them.
         
+        Only promotes PENDING → READY. Already READY/IN_PROGRESS/DONE milestones are skipped.
         These can be executed in parallel by LangGraph.
         """
         mm = self._milestone_map()
         ready = []
         for m in self.milestones:
             if m.status != TaskStatus.PENDING:
+                if m.status == TaskStatus.READY:
+                    ready.append(m)
                 continue
             if all(mm[pid].status == TaskStatus.DONE for pid in m.prerequisites if pid in mm):
+                m.status = TaskStatus.READY
                 ready.append(m)
         return ready
 
