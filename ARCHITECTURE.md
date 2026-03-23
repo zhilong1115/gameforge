@@ -36,6 +36,48 @@ Input:  game_design.md (human-written GDD)
 Output: Playable game with balanced mechanics + test suite
 ```
 
+### 1.5 User Configuration
+
+GameForge requires two things from the user:
+
+#### Game Design Document (GDD)
+A markdown file describing the game. Can be rough — the Normalizer fills in gaps. Minimum viable GDD needs: game name, core mechanic, and target platform.
+
+#### LLM API Configuration (`llm_config.json`)
+Specifies which LLM providers and models to use for each agent role:
+
+```json
+{
+  "default": {
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-20250514",
+    "api_key": "${ANTHROPIC_API_KEY}",
+    "temperature": 0.7
+  },
+  "fast": {
+    "provider": "openai",
+    "model": "gpt-4o-mini",
+    "api_key": "${OPENAI_API_KEY}",
+    "temperature": 0.3
+  },
+  "local": {
+    "provider": "ollama",
+    "model": "qwen2.5:7b",
+    "base_url": "http://localhost:11434",
+    "temperature": 0.7
+  }
+}
+```
+
+Each `AgentConfig` references a key from this file (e.g. `model: "default"` or `model: "fast"`). This decouples agent logic from LLM provider — swap models without changing the plan.
+
+The `ExecutionPlan` stores the config path:
+```python
+class ExecutionPlan(BaseModel):
+    llm_config_path: str = "./llm_config.json"
+    custom_skills_dir: str | None = None  # optional user-provided tools
+```
+
 ---
 
 ## 2. System Architecture
@@ -129,6 +171,84 @@ The system validates the milestone DAG at plan creation:
 1. **Reference check** — all prerequisite/next IDs must exist
 2. **Mirror consistency** — if A.next contains B, then B.prerequisites must contain A
 3. **Cycle detection** — topological sort (Kahn's algorithm) to ensure no circular dependencies
+
+#### 3.1.4 Milestone Config (JSON)
+
+Each milestone is saved as a self-contained JSON file that serves as both documentation and AutoGen GroupChat configuration. Example `milestone_1_core_game_loop.json`:
+
+```json
+{
+  "id": "1",
+  "title": "Core Game Loop",
+  "description": "Minimum playable version: basic game round from start to scoring",
+  "prerequisites": [],
+  "next": ["2", "3"],
+  "programming_language": "typescript",
+  "status": "pending",
+  "tasks": [
+    {
+      "id": "1.1",
+      "title": "Data structures and types",
+      "description": "Define all core data types: tiles, hands, melds, scoring",
+      "depends_on": [],
+      "agents": [
+        {
+          "role": "designer",
+          "model": "default",
+          "temperature": 0.7,
+          "max_rounds": 15,
+          "system_prompt": "Design the tile and hand data structures for a mahjong game..."
+        },
+        {
+          "role": "critic",
+          "model": "default",
+          "temperature": 0.3,
+          "max_rounds": 10,
+          "system_prompt": "Review the proposed data structures for completeness..."
+        }
+      ],
+      "max_iterations": 5,
+      "status": "pending"
+    },
+    {
+      "id": "1.2",
+      "title": "Core game logic",
+      "description": "Implement the main game loop: draw, discard, meld, win detection",
+      "depends_on": ["1.1"],
+      "agents": [
+        { "role": "coder", "model": "default", "temperature": 0.3, "max_rounds": 20 },
+        { "role": "critic", "model": "fast", "temperature": 0.3, "max_rounds": 10 }
+      ],
+      "max_iterations": 5,
+      "status": "pending"
+    }
+  ],
+  "playtest_criteria": [
+    {
+      "description": "Can complete a basic game round from deal to scoring",
+      "metric": "completion_rate",
+      "threshold": 1.0,
+      "operator": ">="
+    }
+  ],
+  "human_approved": null,
+  "human_feedback": ""
+}
+```
+
+Key fields explained:
+
+| Field | Purpose |
+|-------|---------|
+| `prerequisites` / `next` | DAG edges — defines execution order and parallelism |
+| `tasks[].depends_on` | Intra-milestone task dependencies (task 1.2 waits for 1.1) |
+| `tasks[].agents` | Which agents participate; each references an LLM config key via `model` |
+| `tasks[].agents[].system_prompt` | Task-specific instructions injected into the agent's prompt |
+| `tasks[].agents[].max_rounds` | Limits AutoGen conversation length to control cost |
+| `tasks[].max_iterations` | Max design→code→test cycles before escalating to human |
+| `playtest_criteria` | Measurable conditions that must pass for the milestone to complete |
+| `human_approved` | `null` = not reviewed, `true` = approved, `false` = rejected |
+| `human_feedback` | Human's notes when rejecting — fed back to agents on retry |
 
 ### 3.2 Producer (Planning Phase)
 
