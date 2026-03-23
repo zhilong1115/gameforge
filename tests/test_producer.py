@@ -53,6 +53,7 @@ def test_produce_from_template_agents():
     roles = [a.role for a in m1.agents]
     assert AgentRole.DESIGNER in roles
     assert AgentRole.CODER in roles
+    assert AgentRole.PLAYTESTER in roles
     assert AgentRole.CRITIC in roles
 
 

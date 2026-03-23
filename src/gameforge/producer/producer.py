@@ -95,8 +95,8 @@ Your output must be valid JSON matching this schema:
 - **designer**: designs mechanics, data structures, rules
 - **critic**: reviews all proposals, finds edge cases
 - **coder**: writes code from design specs
+- **playtester**: runs game simulations via tool calls, reports statistics
 - **balancer**: analyzes playtest data, proposes adjustments
-- **playtester**: runs simulations (algorithmic, not LLM)
 
 ---
 
@@ -265,9 +265,10 @@ def produce_from_template(gdd_path: str, output_path: str | None = None) -> Exec
             agents=[
                 AgentConfig(role=AgentRole.DESIGNER, temperature=0.7, system_prompt="Design data structures, game rules, and core mechanics"),
                 AgentConfig(role=AgentRole.CODER, temperature=0.3, system_prompt="Implement the game logic from design specs"),
-                AgentConfig(role=AgentRole.CRITIC, temperature=0.3, system_prompt="Review designs and code for correctness and edge cases"),
+                AgentConfig(role=AgentRole.PLAYTESTER, temperature=0.0, system_prompt="Run game simulations and report statistics"),
+                AgentConfig(role=AgentRole.CRITIC, temperature=0.3, system_prompt="Review designs, code, and playtest results for correctness"),
             ],
-            speaker_order=[AgentRole.DESIGNER, AgentRole.CRITIC, AgentRole.CODER, AgentRole.CRITIC],
+            speaker_order=[AgentRole.DESIGNER, AgentRole.CRITIC, AgentRole.CODER, AgentRole.CRITIC, AgentRole.PLAYTESTER, AgentRole.CRITIC],
             max_rounds=20,
             playtest_criteria=[
                 PlaytestCriteria(
@@ -287,9 +288,10 @@ def produce_from_template(gdd_path: str, output_path: str | None = None) -> Exec
             agents=[
                 AgentConfig(role=AgentRole.DESIGNER, temperature=0.7, system_prompt="Design progression systems: antes, shops, god tiles"),
                 AgentConfig(role=AgentRole.CODER, temperature=0.3, system_prompt="Implement progression and economy systems"),
+                AgentConfig(role=AgentRole.PLAYTESTER, temperature=0.0, system_prompt="Run full-run simulations through all 8 antes"),
                 AgentConfig(role=AgentRole.CRITIC, temperature=0.3, system_prompt="Ensure progression systems are balanced and complete"),
             ],
-            speaker_order=[AgentRole.DESIGNER, AgentRole.CRITIC, AgentRole.CODER, AgentRole.CRITIC],
+            speaker_order=[AgentRole.DESIGNER, AgentRole.CRITIC, AgentRole.CODER, AgentRole.CRITIC, AgentRole.PLAYTESTER, AgentRole.CRITIC],
             max_rounds=20,
             playtest_criteria=[
                 PlaytestCriteria(
@@ -307,10 +309,12 @@ def produce_from_template(gdd_path: str, output_path: str | None = None) -> Exec
             next=[],
             programming_language=language,
             agents=[
+                AgentConfig(role=AgentRole.PLAYTESTER, temperature=0.0, system_prompt="Run 1000-game simulations and report detailed statistics"),
                 AgentConfig(role=AgentRole.BALANCER, temperature=0.5, system_prompt="Analyze playtest data and propose balance adjustments"),
+                AgentConfig(role=AgentRole.CODER, temperature=0.3, system_prompt="Apply balance parameter changes to game code"),
                 AgentConfig(role=AgentRole.CRITIC, temperature=0.3, system_prompt="Validate that balance changes improve overall game health"),
             ],
-            speaker_order=[AgentRole.BALANCER, AgentRole.CRITIC],
+            speaker_order=[AgentRole.PLAYTESTER, AgentRole.BALANCER, AgentRole.CRITIC, AgentRole.CODER, AgentRole.PLAYTESTER, AgentRole.CRITIC],
             max_rounds=15,
             playtest_criteria=[
                 PlaytestCriteria(

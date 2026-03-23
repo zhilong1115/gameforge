@@ -206,13 +206,19 @@ Each milestone is saved as a self-contained JSON file that doubles as an AutoGen
       "system_prompt": "Implement the game logic from design specs in TypeScript"
     },
     {
+      "role": "playtester",
+      "model": "default",
+      "temperature": 0.0,
+      "system_prompt": "Run game simulations via tool calls and report statistics"
+    },
+    {
       "role": "critic",
       "model": "fast",
       "temperature": 0.3,
-      "system_prompt": "Review designs and code for correctness, edge cases, and completeness"
+      "system_prompt": "Review designs, code, and playtest results for correctness"
     }
   ],
-  "speaker_order": ["designer", "critic", "coder", "critic"],
+  "speaker_order": ["designer", "critic", "coder", "critic", "playtester", "critic"],
   "manager_model": "default",
   "max_rounds": 20,
   "max_iterations": 5,
@@ -315,15 +321,16 @@ Key design decision: **Milestone status lives on the Milestone model itself**, n
 2. Call plan.ready_milestones() → get READY milestones
 3. For each READY milestone (can parallelize):
    a. Set status = IN_PROGRESS
-   b. Execute tasks in dependency order:
-      - Design phase (AutoGen: Designer + Critic)
-      - Code phase (AutoGen: Coder + Critic)
-      - Playtest phase (Algorithmic simulator)
-      - Balance phase (AutoGen: Balancer + Critic)
-   c. If playtest fails and iterations < max: retry from (b)
-   d. If playtest passes: human review checkpoint
-   e. Human approves → status = DONE
-   f. Human rejects → incorporate feedback, retry
+   b. Start AutoGen GroupChat with milestone's agents + speaker_order
+      - Designer proposes → Critic reviews
+      - Coder implements → Critic reviews
+      - Playtester runs simulations (tool calls) → reports results
+      - Balancer analyzes → Critic validates
+   c. Check playtest_criteria against Playtester's results
+   d. If criteria fail and iterations < max: restart GroupChat with feedback
+   e. If criteria pass: human review checkpoint
+   f. Human approves → status = DONE
+   g. Human rejects → incorporate feedback, retry
 4. Repeat from (2) until plan.is_complete
 ```
 
@@ -333,21 +340,32 @@ Five specialized agents, each with a focused role:
 
 | Agent | Type | Role | Key Behaviors |
 |-------|------|------|---------------|
-| **Producer** | LangGraph node | Plans milestones from GDD | Reads GDD, outputs DAG, assigns agents to tasks |
+| **Producer** | LangGraph node | Plans milestones from GDD | Reads GDD, outputs DAG, assigns agents to milestones |
 | **Designer** | AutoGen participant | Designs mechanics & data structures | Proposes solutions, iterates with Critic, outputs design specs |
 | **Critic** | AutoGen participant | Quality gate for all phases | Challenges assumptions, finds edge cases, must approve before proceeding |
 | **Coder** | AutoGen participant | Generates code from design specs | Writes implementation + tests, responds to Critic review feedback |
-| **Balancer** | AutoGen participant | Tunes game numbers | Analyzes playtest statistics, proposes parameter adjustments |
+| **Playtester** | AutoGen participant + tools | Runs simulations & reports data | Calls game engine via tool functions, runs N games, reports statistics back to GroupChat |
+| **Balancer** | AutoGen participant | Tunes game numbers | Analyzes Playtester's statistics, proposes parameter adjustments |
 
-The **Playtester** is not an LLM agent — it's an algorithmic simulator that runs the game engine with heuristic strategies and collects statistics.
+All agents participate in the same AutoGen GroupChat within a milestone. The **Playtester** is unique in that it has **tool access** to the game engine — it invokes simulation functions and reports results back into the conversation for the Balancer and Critic to discuss.
 
-### 3.5 Simulator (Playtesting)
+### 3.5 Simulator (Playtester's Toolbox)
 
-**Design decision**: The playtester is algorithmic, not LLM-based.
+The Playtester agent has tool access to the game engine for running simulations. The simulation itself is **algorithmic, not LLM-based** — the Playtester agent decides *what* to test, the tools execute it fast.
 
-- **Why**: Running GPT to play 1000 games of mahjong would cost hundreds of dollars and take hours. Greedy heuristic strategies run in seconds.
-- **How**: `game_engine.py` implements the game rules. `strategies.py` provides greedy/random AI players. `runner.py` orchestrates N simulations and collects metrics.
-- **Output**: `PlaytestResult` with metrics like win rate, score distribution, strategy dominance percentages.
+- **Game Engine** (`game_engine.py`): implements game rules (deterministic)
+- **Strategies** (`strategies.py`): greedy/random AI player heuristics for simulation
+- **Runner** (`runner.py`): orchestrates N simulations, collects metrics
+- **Why tools, not LLM play**: Running GPT to play 1000 games costs hundreds of dollars and takes hours. Heuristic strategies run in seconds. The Playtester agent's job is to *interpret* results, not *play* the game.
+
+Example flow in GroupChat:
+```
+Playtester: "Running 500 simulations with current parameters..."
+            [tool call: run_simulation(n=500)]
+Playtester: "Results: win_rate=72%, avg_score=2450, dominant_strategy=flush (38%)"
+Balancer:   "Win rate too high. Suggest reducing base score multiplier from 3x to 2.5x"
+Critic:     "Agree, but also check if flush dominance drops with the change"
+```
 
 ### 3.6 Translator
 
@@ -504,6 +522,14 @@ The reference implementation uses HU, a Balatro-inspired mahjong roguelike.
 | M2 | Can play through all 8 antes | full_run_completion | ≥ 80% |
 | M4 | Early ante win rate healthy | ante_1_2_win_rate | 65-80% |
 | M4 | No dominant god tile | max_god_tile_purchase_rate | < 90% |
+
+### Speaker Order Examples
+
+| Milestone | Speaker Order | Why |
+|-----------|--------------|-----|
+| M1: Core Loop | designer → critic → coder → critic → playtester → critic | Design first, then implement, then verify |
+| M3: UI | designer → coder → critic | Less review needed for visual work |
+| M4: Balance | playtester → balancer → critic → coder → playtester → critic | Data-driven: test first, then adjust, then re-test |
 
 ---
 
