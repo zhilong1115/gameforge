@@ -1,12 +1,12 @@
-"""Producer — reads a GDD and generates an ExecutionPlan JSON.
+"""Producer — reads a GDD and generates an ExecutionPlan (milestone DAG).
 
 The Producer calls an LLM to:
 1. Extract game metadata (GameConfig)
-2. Break the game into ordered Milestones
-3. Break each Milestone into Tasks with agent assignments
+2. Break the game into milestones with agent assignments
+3. Define DAG dependencies (prerequisites/next)
 4. Define playtest criteria per milestone
 
-Output: a validated ExecutionPlan (Pydantic model) that can be serialized to JSON.
+Output: a validated ExecutionPlan where each Milestone is an AutoGen GroupChat config.
 """
 
 import json
@@ -18,9 +18,8 @@ from gameforge.models.plan import (
     ExecutionPlan,
     GameConfig,
     Milestone,
+    MilestoneStatus,
     PlaytestCriteria,
-    Task,
-    TaskStatus,
 )
 from gameforge.agents import AGENTS
 
@@ -51,23 +50,25 @@ Your output must be valid JSON matching this schema:
       "prerequisites": [],
       "next": ["2", "3"],
       "programming_language": "typescript",
-      "tasks": [
+      "agents": [
         {{
-          "id": "1.1",
-          "title": "string",
-          "description": "detailed task spec",
-          "depends_on": ["1.0"],
-          "agents": [
-            {{
-              "role": "designer",
-              "temperature": 0.7,
-              "max_rounds": 15,
-              "system_prompt": "specific instructions for this task"
-            }}
-          ],
-          "max_iterations": 5
+          "role": "designer",
+          "temperature": 0.7,
+          "system_prompt": "specific instructions for this milestone"
+        }},
+        {{
+          "role": "critic",
+          "temperature": 0.3
+        }},
+        {{
+          "role": "coder",
+          "temperature": 0.3
         }}
       ],
+      "speaker_order": ["designer", "critic", "coder", "critic"],
+      "manager_model": "default",
+      "max_rounds": 20,
+      "max_iterations": 5,
       "playtest_criteria": [
         {{
           "description": "what must be true to pass",
@@ -83,12 +84,12 @@ Your output must be valid JSON matching this schema:
 ### Planning Rules:
 
 1. **Start minimal** — Milestone 1 should be the simplest playable version
-2. **Each milestone adds ONE major system** — don't cram too much in
-3. **Tasks should be small** — 1-2 hours of agent work each
-4. **Dependencies matter** — task 1.3 can't start before 1.1 and 1.2
-5. **Every task gets agents** — at minimum Designer + Critic, or Coder + Critic
-6. **Playtest criteria are measurable** — "can complete a round", "win rate > 40%"
-7. **System prompts are task-specific** — reference the actual game mechanics
+2. **Each milestone = one GroupChat** — keep milestones small and focused
+3. **DAG, not linear** — milestones that don't depend on each other can run in parallel
+4. **prerequisites + next must be mirrors** — if 1.next has 2, then 2.prerequisites has 1
+5. **Every milestone gets agents** — at minimum Designer + Critic, or Coder + Critic
+6. **speaker_order defines conversation flow** — e.g. [designer, critic, coder, critic]
+7. **Playtest criteria are measurable** — "can complete a round", "win rate > 40%"
 
 ### Agent Roles:
 - **designer**: designs mechanics, data structures, rules
@@ -117,21 +118,10 @@ def read_gdd(gdd_path: str) -> str:
 
 
 def generate_plan_with_llm(gdd_content: str, gdd_path: str, llm_fn=None) -> ExecutionPlan:
-    """Generate an ExecutionPlan by calling an LLM.
-    
-    Args:
-        gdd_content: The raw GDD markdown text
-        gdd_path: Path to the GDD file
-        llm_fn: A callable(prompt: str) -> str that calls the LLM.
-                 If None, uses a default implementation.
-    
-    Returns:
-        A validated ExecutionPlan
-    """
+    """Generate an ExecutionPlan by calling an LLM."""
     prompt = PLAN_GENERATION_PROMPT.format(gdd_content=gdd_content)
     
     if llm_fn is None:
-        # Default: try ollama local, then fall back to placeholder
         try:
             import requests
             resp = requests.post(
@@ -152,37 +142,19 @@ def generate_plan_with_llm(gdd_content: str, gdd_path: str, llm_fn=None) -> Exec
     else:
         raw_json = llm_fn(prompt)
     
-    # Parse the LLM output
     plan_data = json.loads(raw_json)
-    
-    # Add gdd_path to game config
     if "game" in plan_data:
         plan_data["game"]["gdd_path"] = gdd_path
     
-    # Validate with Pydantic
     plan = ExecutionPlan.model_validate(plan_data)
-    
     return plan
 
 
 def produce(gdd_path: str, llm_fn=None, output_path: str | None = None) -> ExecutionPlan:
-    """Main entry point: read GDD → generate plan → optionally save.
-    
-    Args:
-        gdd_path: Path to the GDD markdown file
-        llm_fn: Optional custom LLM callable
-        output_path: If provided, save the plan JSON here
-    
-    Returns:
-        The generated ExecutionPlan
-    """
-    # Read GDD
+    """Main entry point: read GDD → generate plan → optionally save."""
     gdd_content = read_gdd(gdd_path)
-    
-    # Generate plan
     plan = generate_plan_with_llm(gdd_content, gdd_path, llm_fn)
     
-    # Save if requested
     if output_path:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         with open(output_path, "w", encoding="utf-8") as f:
@@ -197,40 +169,23 @@ def produce_full(
     output_dir: str = "./output",
     llm_fn=None,
 ) -> tuple[str, list[str]]:
-    """Full pipeline: normalize GDD → generate milestones → save all files.
-    
-    Output:
-        - output_dir/gdd_normalized.md (system prompt for agents)
-        - output_dir/milestone_1_*.json (one per milestone)
-    
-    Args:
-        gdd_path: Path to user's raw GDD
-        output_dir: Where to save all output files
-        llm_fn: Optional LLM callable
-    
-    Returns:
-        Tuple of (normalized_gdd_path, list_of_milestone_paths)
-    """
+    """Full pipeline: normalize GDD → generate milestones → save all files."""
     from gameforge.producer.normalizer import normalize_gdd
     
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     
-    # Step 1: Read and normalize GDD
     gdd_content = read_gdd(gdd_path)
     gdd_normalized_path = str(out / "gdd_normalized.md")
     normalize_gdd(gdd_content, output_path=gdd_normalized_path, llm_fn=llm_fn)
     
-    # Step 2: Generate plan (template or LLM)
     if llm_fn:
         plan = generate_plan_with_llm(gdd_content, gdd_path, llm_fn)
     else:
         plan = produce_from_template(gdd_path)
     
-    # Step 3: Save each milestone as separate JSON
     milestone_paths = plan.save_milestones(output_dir)
     
-    # Step 4: Also save overview (for reference, not execution)
     overview_path = str(out / "plan_overview.json")
     with open(overview_path, "w", encoding="utf-8") as f:
         f.write(plan.model_dump_json(indent=2))
@@ -251,15 +206,12 @@ def produce_from_template(gdd_path: str, output_path: str | None = None) -> Exec
     """Generate a plan using templates instead of LLM.
     
     Useful for testing or when no LLM is available.
-    Reads the GDD and creates a reasonable default plan.
     """
     gdd_content = read_gdd(gdd_path)
     
-    # Extract basic info from GDD
     lines = gdd_content.split("\n")
     title = lines[0].replace("#", "").strip() if lines else "Unknown Game"
     
-    # Detect framework from GDD
     framework = ""
     language = "python"
     platforms = ["web"]
@@ -275,7 +227,6 @@ def produce_from_template(gdd_path: str, output_path: str | None = None) -> Exec
         language = "gdscript"
     elif "pygame" in content_lower:
         framework = "pygame"
-        language = "python"
     
     if "roguelike" in content_lower:
         game_type += "roguelike "
@@ -289,7 +240,6 @@ def produce_from_template(gdd_path: str, output_path: str | None = None) -> Exec
         art_style = "pixel"
     elif "2d" in content_lower:
         art_style = "2d"
-    
     if "mobile" in content_lower:
         platforms.append("mobile")
     
@@ -304,7 +254,6 @@ def produce_from_template(gdd_path: str, output_path: str | None = None) -> Exec
         output_dir="./output",
     )
     
-    # Create default milestones (DAG: 1 → 2, 1 → 3, 2+3 → 4... but we only have 3 for now)
     milestones = [
         Milestone(
             id="1",
@@ -313,38 +262,13 @@ def produce_from_template(gdd_path: str, output_path: str | None = None) -> Exec
             prerequisites=[],
             next=["2"],
             programming_language=language,
-            tasks=[
-                Task(
-                    id="1.1",
-                    title="Data structures and types",
-                    description="Define all core data types: tiles, hands, melds, scoring",
-                    agents=[
-                        AgentConfig(role=AgentRole.DESIGNER, temperature=0.7, max_rounds=15),
-                        AgentConfig(role=AgentRole.CRITIC, temperature=0.3, max_rounds=10),
-                    ],
-                ),
-                Task(
-                    id="1.2",
-                    title="Core game logic",
-                    description="Implement the main game loop: draw, discard, meld, win detection",
-                    depends_on=["1.1"],
-                    agents=[
-                        AgentConfig(role=AgentRole.CODER, temperature=0.3, max_rounds=20),
-                        AgentConfig(role=AgentRole.CRITIC, temperature=0.3, max_rounds=10),
-                    ],
-                ),
-                Task(
-                    id="1.3",
-                    title="Scoring system",
-                    description="Implement scoring: base score, fan patterns, multipliers",
-                    depends_on=["1.1", "1.2"],
-                    agents=[
-                        AgentConfig(role=AgentRole.DESIGNER, temperature=0.7, max_rounds=15),
-                        AgentConfig(role=AgentRole.CODER, temperature=0.3, max_rounds=20),
-                        AgentConfig(role=AgentRole.CRITIC, temperature=0.3, max_rounds=10),
-                    ],
-                ),
+            agents=[
+                AgentConfig(role=AgentRole.DESIGNER, temperature=0.7, system_prompt="Design data structures, game rules, and core mechanics"),
+                AgentConfig(role=AgentRole.CODER, temperature=0.3, system_prompt="Implement the game logic from design specs"),
+                AgentConfig(role=AgentRole.CRITIC, temperature=0.3, system_prompt="Review designs and code for correctness and edge cases"),
             ],
+            speaker_order=[AgentRole.DESIGNER, AgentRole.CRITIC, AgentRole.CODER, AgentRole.CRITIC],
+            max_rounds=20,
             playtest_criteria=[
                 PlaytestCriteria(
                     description="Can complete a basic game round from deal to scoring",
@@ -360,40 +284,13 @@ def produce_from_template(gdd_path: str, output_path: str | None = None) -> Exec
             prerequisites=["1"],
             next=["3"],
             programming_language=language,
-            tasks=[
-                Task(
-                    id="2.1",
-                    title="Ante and blind system",
-                    description="Implement 8 antes with 3 blinds each, scaling targets",
-                    agents=[
-                        AgentConfig(role=AgentRole.DESIGNER, temperature=0.7),
-                        AgentConfig(role=AgentRole.CODER, temperature=0.3),
-                        AgentConfig(role=AgentRole.CRITIC, temperature=0.3),
-                    ],
-                ),
-                Task(
-                    id="2.2",
-                    title="Shop and economy",
-                    description="Implement shop phase: buying god tiles, flower cards, gold management",
-                    depends_on=["2.1"],
-                    agents=[
-                        AgentConfig(role=AgentRole.DESIGNER, temperature=0.7),
-                        AgentConfig(role=AgentRole.CODER, temperature=0.3),
-                        AgentConfig(role=AgentRole.CRITIC, temperature=0.3),
-                    ],
-                ),
-                Task(
-                    id="2.3",
-                    title="God tiles and flower cards",
-                    description="Implement passive abilities (god tiles) and consumables (flower cards)",
-                    depends_on=["2.1"],
-                    agents=[
-                        AgentConfig(role=AgentRole.DESIGNER, temperature=0.7),
-                        AgentConfig(role=AgentRole.CODER, temperature=0.3),
-                        AgentConfig(role=AgentRole.CRITIC, temperature=0.3),
-                    ],
-                ),
+            agents=[
+                AgentConfig(role=AgentRole.DESIGNER, temperature=0.7, system_prompt="Design progression systems: antes, shops, god tiles"),
+                AgentConfig(role=AgentRole.CODER, temperature=0.3, system_prompt="Implement progression and economy systems"),
+                AgentConfig(role=AgentRole.CRITIC, temperature=0.3, system_prompt="Ensure progression systems are balanced and complete"),
             ],
+            speaker_order=[AgentRole.DESIGNER, AgentRole.CRITIC, AgentRole.CODER, AgentRole.CRITIC],
+            max_rounds=20,
             playtest_criteria=[
                 PlaytestCriteria(
                     description="Can play through all 8 antes",
@@ -409,27 +306,12 @@ def produce_from_template(gdd_path: str, output_path: str | None = None) -> Exec
             prerequisites=["2"],
             next=[],
             programming_language=language,
-            tasks=[
-                Task(
-                    id="3.1",
-                    title="Difficulty tuning",
-                    description="Adjust score targets, shop prices, god tile effects for target win rates",
-                    agents=[
-                        AgentConfig(role=AgentRole.BALANCER, temperature=0.5),
-                        AgentConfig(role=AgentRole.CRITIC, temperature=0.3),
-                    ],
-                ),
-                Task(
-                    id="3.2",
-                    title="Strategy viability check",
-                    description="Ensure 4+ viable build strategies through mass simulation",
-                    depends_on=["3.1"],
-                    agents=[
-                        AgentConfig(role=AgentRole.BALANCER, temperature=0.5),
-                        AgentConfig(role=AgentRole.CRITIC, temperature=0.3),
-                    ],
-                ),
+            agents=[
+                AgentConfig(role=AgentRole.BALANCER, temperature=0.5, system_prompt="Analyze playtest data and propose balance adjustments"),
+                AgentConfig(role=AgentRole.CRITIC, temperature=0.3, system_prompt="Validate that balance changes improve overall game health"),
             ],
+            speaker_order=[AgentRole.BALANCER, AgentRole.CRITIC],
+            max_rounds=15,
             playtest_criteria=[
                 PlaytestCriteria(
                     description="Early ante win rate 65-80%",
@@ -447,10 +329,7 @@ def produce_from_template(gdd_path: str, output_path: str | None = None) -> Exec
         ),
     ]
     
-    plan = ExecutionPlan(
-        game=game_config,
-        milestones=milestones,
-    )
+    plan = ExecutionPlan(game=game_config, milestones=milestones)
     
     if output_path:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)

@@ -11,11 +11,10 @@ class GameForgeState(TypedDict):
     game_name: str
 
     # ── Plan ──
-    # Milestone status is tracked directly on each Milestone.status field
-    # (PENDING → IN_PROGRESS → DONE/FAILED). Use ExecutionPlan.ready_milestones()
-    # to find what can run next.
+    # Milestone status tracked on Milestone.status (PENDING → READY → IN_PROGRESS → DONE/FAILED).
+    # Use ExecutionPlan.ready_milestones() to find what can run next.
     execution_plan: dict[str, Any]  # Serialized ExecutionPlan
-    current_task_id: str | None
+    current_milestone_id: str | None  # ID of milestone currently being executed
 
     # ── Design Phase ──
     design_spec: dict[str, Any] | None  # Serialized DesignSpec

@@ -9,10 +9,9 @@ from gameforge.models import (
     ExecutionPlan,
     GameConfig,
     Milestone,
+    MilestoneStatus,
     PlaytestCriteria,
     PlaytestResult,
-    Task,
-    TaskStatus,
 )
 
 
@@ -53,7 +52,6 @@ def test_agent_config_defaults():
     agent = AgentConfig(role=AgentRole.DESIGNER)
     assert agent.model == "default"
     assert agent.temperature == 0.7
-    assert agent.max_rounds == 10
 
 
 def test_agent_config_custom():
@@ -61,44 +59,11 @@ def test_agent_config_custom():
         role=AgentRole.CODER,
         model="fast",
         temperature=0.3,
-        max_rounds=5,
+        system_prompt="Write clean TypeScript",
     )
     assert agent.role == AgentRole.CODER
     assert agent.model == "fast"
-
-
-# ── Task ──
-
-
-def test_task_defaults():
-    task = Task(id="1.1", title="Create tile data structure")
-    assert task.status == TaskStatus.PENDING
-    assert task.agents == []
-    assert task.depends_on == []
-    assert task.iterations == 0
-
-
-def test_task_with_agents():
-    task = Task(
-        id="1.1",
-        title="Design tile system",
-        agents=[
-            AgentConfig(role=AgentRole.DESIGNER),
-            AgentConfig(role=AgentRole.CRITIC, temperature=0.3),
-        ],
-    )
-    assert len(task.agents) == 2
-    assert task.agents[0].role == AgentRole.DESIGNER
-    assert task.agents[1].temperature == 0.3
-
-
-def test_task_with_dependencies():
-    task = Task(
-        id="1.3",
-        title="Win detection",
-        depends_on=["1.1", "1.2"],
-    )
-    assert task.depends_on == ["1.1", "1.2"]
+    assert agent.system_prompt == "Write clean TypeScript"
 
 
 # ── Milestone ──
@@ -111,27 +76,37 @@ def test_milestone():
         programming_language="python",
         prerequisites=[],
         next=["2"],
-        tasks=[
-            Task(id="1.1", title="Tile data structures"),
-            Task(id="1.2", title="Draw/discard logic"),
-            Task(id="1.3", title="Win detection", depends_on=["1.1", "1.2"]),
+        agents=[
+            AgentConfig(role=AgentRole.DESIGNER),
+            AgentConfig(role=AgentRole.CODER),
+            AgentConfig(role=AgentRole.CRITIC, temperature=0.3),
         ],
+        speaker_order=[AgentRole.DESIGNER, AgentRole.CRITIC, AgentRole.CODER, AgentRole.CRITIC],
+        max_rounds=20,
         playtest_criteria=[
             PlaytestCriteria(description="Can complete a basic round"),
         ],
     )
-    assert len(m.tasks) == 3
+    assert len(m.agents) == 3
     assert m.programming_language == "python"
-    assert m.status == TaskStatus.PENDING
+    assert m.status == MilestoneStatus.PENDING
     assert m.human_approved is None
     assert m.prerequisites == []
     assert m.next == ["2"]
+    assert len(m.speaker_order) == 4
+    assert m.max_rounds == 20
 
 
 def test_milestone_defaults():
     m = Milestone(id="1", title="Test")
     assert m.prerequisites == []
     assert m.next == []
+    assert m.agents == []
+    assert m.speaker_order == []
+    assert m.max_rounds == 20
+    assert m.manager_model == "default"
+    assert m.max_iterations == 5
+    assert m.iterations == 0
 
 
 # ── ExecutionPlan ──
@@ -183,12 +158,12 @@ def test_execution_plan_dag_mirror_error():
         ),
         milestones=[
             Milestone(id="1", title="Core", next=["2"]),
-            Milestone(id="2", title="UI", prerequisites=[]),  # missing "1"
+            Milestone(id="2", title="UI", prerequisites=[]),
         ],
     )
     errors = plan.validate_dag()
     assert len(errors) > 0
-    assert any("mirror" in e or "prerequisites" in e for e in errors)
+    assert any("prerequisites" in e for e in errors)
 
 
 def test_execution_plan_dag_cycle():
@@ -221,28 +196,24 @@ def test_execution_plan_ready_milestones():
             Milestone(id="4", title="Polish", prerequisites=["2", "3"], next=[]),
         ],
     )
-    # Initially only milestone 1 is ready (promoted from PENDING → READY)
     ready = plan.ready_milestones()
     assert [m.id for m in ready] == ["1"]
-    assert plan.milestones[0].status == TaskStatus.READY
+    assert plan.milestones[0].status == MilestoneStatus.READY
 
-    # After milestone 1 completes, 2 and 3 become ready
-    plan.milestones[0].status = TaskStatus.DONE
+    plan.milestones[0].status = MilestoneStatus.DONE
     ready = plan.ready_milestones()
     assert sorted(m.id for m in ready) == ["2", "3"]
-    assert plan.milestones[1].status == TaskStatus.READY
-    assert plan.milestones[2].status == TaskStatus.READY
+    assert plan.milestones[1].status == MilestoneStatus.READY
+    assert plan.milestones[2].status == MilestoneStatus.READY
 
-    # After 2 completes but not 3, milestone 4 is NOT ready (3 still READY, not DONE)
-    plan.milestones[1].status = TaskStatus.DONE
+    plan.milestones[1].status = MilestoneStatus.DONE
     ready = plan.ready_milestones()
-    assert [m.id for m in ready] == ["3"]  # 3 is still READY from before
+    assert [m.id for m in ready] == ["3"]
 
-    # After both 2+3 complete, milestone 4 becomes ready
-    plan.milestones[2].status = TaskStatus.DONE
+    plan.milestones[2].status = MilestoneStatus.DONE
     ready = plan.ready_milestones()
     assert [m.id for m in ready] == ["4"]
-    assert plan.milestones[3].status == TaskStatus.READY
+    assert plan.milestones[3].status == MilestoneStatus.READY
 
 
 def test_execution_plan_complete():
@@ -254,8 +225,8 @@ def test_execution_plan_complete():
             target_platforms=["web"],
         ),
         milestones=[
-            Milestone(id="1", title="M1", status=TaskStatus.DONE),
-            Milestone(id="2", title="M2", status=TaskStatus.DONE),
+            Milestone(id="1", title="M1", status=MilestoneStatus.DONE),
+            Milestone(id="2", title="M2", status=MilestoneStatus.DONE),
         ],
     )
     assert plan.is_complete
@@ -289,13 +260,8 @@ def test_execution_plan_json_roundtrip():
                 id="1",
                 title="Core Round",
                 programming_language="typescript",
-                tasks=[
-                    Task(
-                        id="1.1",
-                        title="Tiles",
-                        agents=[AgentConfig(role=AgentRole.DESIGNER)],
-                    ),
-                ],
+                agents=[AgentConfig(role=AgentRole.DESIGNER)],
+                speaker_order=[AgentRole.DESIGNER, AgentRole.CRITIC],
             ),
         ],
     )
@@ -303,7 +269,8 @@ def test_execution_plan_json_roundtrip():
     restored = ExecutionPlan.model_validate_json(json_str)
     assert restored.game.game_name == "HU"
     assert restored.milestones[0].programming_language == "typescript"
-    assert restored.milestones[0].tasks[0].agents[0].role == AgentRole.DESIGNER
+    assert restored.milestones[0].agents[0].role == AgentRole.DESIGNER
+    assert restored.milestones[0].speaker_order == [AgentRole.DESIGNER, AgentRole.CRITIC]
 
 
 # ── Design Models ──

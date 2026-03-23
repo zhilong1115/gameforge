@@ -6,9 +6,8 @@ from gameforge.models.plan import (
     ExecutionPlan,
     GameConfig,
     Milestone,
+    MilestoneStatus,
     PlaytestCriteria,
-    Task,
-    TaskStatus,
 )
 from gameforge.models.design import (
     BalanceAdjustment,
@@ -26,8 +25,7 @@ __all__ = [
     "ExecutionPlan",
     "GameConfig",
     "Milestone",
+    "MilestoneStatus",
     "PlaytestCriteria",
     "PlaytestResult",
-    "Task",
-    "TaskStatus",
 ]

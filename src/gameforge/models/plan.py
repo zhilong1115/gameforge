@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 # ── Enums ──
 
 
-class TaskStatus(str, Enum):
+class MilestoneStatus(str, Enum):
     PENDING = "pending"
     READY = "ready"  # all prerequisites met, can be executed
     IN_PROGRESS = "in_progress"
@@ -28,29 +28,12 @@ class AgentRole(str, Enum):
 
 
 class AgentConfig(BaseModel):
-    """Per-agent config within a task."""
+    """AutoGen agent configuration within a milestone's GroupChat."""
 
     role: AgentRole
     model: str = "default"  # references key in llm_config.json
     temperature: float = 0.7
-    max_rounds: int = 10  # max AutoGen conversation rounds
-    system_prompt: str = ""  # additional prompt injection
-
-
-# ── Task ──
-
-
-class Task(BaseModel):
-    """A single task within a milestone, executed as an AutoGen GroupChat."""
-
-    id: str = Field(description="Unique task ID, e.g. '1.1'")
-    title: str = Field(description="Short task description")
-    description: str = Field(default="", description="Detailed task spec")
-    depends_on: list[str] = Field(default_factory=list, description="Task IDs this depends on")
-    agents: list[AgentConfig] = Field(default_factory=list, description="Agents participating in this task")
-    max_iterations: int = Field(default=5, description="Max design-code-test cycles")
-    status: TaskStatus = Field(default=TaskStatus.PENDING)
-    iterations: int = Field(default=0, description="Current iteration count")
+    system_prompt: str = ""  # task-specific prompt injection
 
 
 # ── Playtest ──
@@ -69,25 +52,39 @@ class PlaytestCriteria(BaseModel):
 
 
 class Milestone(BaseModel):
-    """A milestone — executed as a LangGraph node containing multiple AutoGen tasks.
+    """A milestone — the atomic execution unit in GameForge.
     
-    DAG structure is defined by `prerequisites` and `next`:
-    - prerequisites: milestone IDs that must ALL complete before this one starts
-    - next: milestone IDs that this one unlocks when complete
+    Each milestone maps directly to one AutoGen GroupChat session.
+    The DAG structure (prerequisites/next) determines execution order.
     
-    These should be mirrors of each other (if A.next contains B, then B.prerequisites contains A).
-    Use `ExecutionPlan.validate_dag()` to check consistency.
+    Lifecycle: PENDING → READY → IN_PROGRESS → DONE / FAILED
     """
 
+    # Identity
     id: str = Field(description="Milestone ID, e.g. '1'")
     title: str = Field(description="Milestone title")
     description: str = Field(default="", description="What this milestone achieves")
+
+    # DAG edges
     prerequisites: list[str] = Field(default_factory=list, description="Milestone IDs that must complete before this starts")
     next: list[str] = Field(default_factory=list, description="Milestone IDs unlocked when this completes")
-    programming_language: str = Field(default="python", description="Language for code generation in this milestone")
-    tasks: list[Task] = Field(default_factory=list)
+
+    # AutoGen GroupChat config
+    agents: list[AgentConfig] = Field(default_factory=list, description="Agents in this GroupChat")
+    speaker_order: list[AgentRole] = Field(default_factory=list, description="Agent speaking sequence, e.g. [designer, critic, coder, critic]")
+    manager_model: str = Field(default="default", description="LLM config key for the GroupChatManager")
+    max_rounds: int = Field(default=20, description="Max conversation rounds in the GroupChat")
+
+    # Execution config
+    programming_language: str = Field(default="python", description="Language for code generation")
+    max_iterations: int = Field(default=5, description="Max retry cycles (design→code→test)")
+    iterations: int = Field(default=0, description="Current iteration count")
+
+    # Quality gate
     playtest_criteria: list[PlaytestCriteria] = Field(default_factory=list)
-    status: TaskStatus = Field(default=TaskStatus.PENDING)
+
+    # Status
+    status: MilestoneStatus = Field(default=MilestoneStatus.PENDING)
     human_approved: bool | None = Field(default=None, description="None=not reviewed, True/False=decision")
     human_feedback: str = Field(default="", description="Feedback from human review")
 
@@ -98,14 +95,12 @@ class Milestone(BaseModel):
 class GameConfig(BaseModel):
     """Game metadata — passed as system context to all agents."""
 
-    # Basic info
     game_name: str
     gdd_path: str
     game_type: str = Field(description="e.g. 'roguelike', 'deck-builder', 'RPG'")
     description: str = Field(default="", description="One-line game description")
     supported_languages: list[str] = Field(default=["en"], description="e.g. ['en', 'zh', 'ja']")
 
-    # Technical info
     target_platforms: list[str] = Field(description="e.g. ['web', 'mobile', 'desktop']")
     game_framework: str = Field(default="", description="e.g. 'phaser', 'pygame', 'godot'")
     art_style: str = Field(default="", description="e.g. 'pixel', '3d', '2d-cartoon', 'ascii'")
@@ -114,68 +109,51 @@ class GameConfig(BaseModel):
 
 # ── Execution Plan ──
 
-# Note: ExecutionPlan is kept for backwards compatibility and overview,
-# but the primary output format is now:
-#   - gdd_normalized.md (system prompt for all agents)
-#   - milestone_N.json (one per milestone, each is an AutoGen GroupChat config)
-
 
 class ExecutionPlan(BaseModel):
-    """Overview of all milestones. Used for planning, not execution.
+    """The full milestone DAG for building a game.
     
-    For execution, each Milestone is saved as a separate JSON file
-    and the normalized GDD.md serves as shared system context.
+    Each Milestone is saved as a separate JSON file that doubles as
+    an AutoGen GroupChat config. The normalized GDD serves as shared
+    system context for all agents.
     """
 
-    # Game config (extracted from GDD, used for overview)
     game: GameConfig
 
     # Config paths
     llm_config_path: str = Field(default="./llm_config.json", description="Path to LLM credentials config")
-    custom_skills_dir: str | None = Field(default=None, description="Path to user-provided skills directory")
+    custom_skills_dir: str | None = Field(default=None, description="Path to user-provided tools")
 
     # Milestones
     milestones: list[Milestone] = Field(default_factory=list)
 
     @property
     def is_complete(self) -> bool:
-        return all(m.status == TaskStatus.DONE for m in self.milestones)
+        return all(m.status == MilestoneStatus.DONE for m in self.milestones)
 
     def _milestone_map(self) -> dict[str, Milestone]:
-        """Build a quick lookup: milestone ID → Milestone."""
         return {m.id: m for m in self.milestones}
 
     def ready_milestones(self) -> list[Milestone]:
-        """Find milestones whose prerequisites are all DONE, mark them READY, and return them.
-        
-        Only promotes PENDING → READY. Already READY/IN_PROGRESS/DONE milestones are skipped.
-        These can be executed in parallel by LangGraph.
-        """
+        """Find milestones whose prerequisites are all DONE, mark them READY, and return them."""
         mm = self._milestone_map()
         ready = []
         for m in self.milestones:
-            if m.status != TaskStatus.PENDING:
-                if m.status == TaskStatus.READY:
+            if m.status != MilestoneStatus.PENDING:
+                if m.status == MilestoneStatus.READY:
                     ready.append(m)
                 continue
-            if all(mm[pid].status == TaskStatus.DONE for pid in m.prerequisites if pid in mm):
-                m.status = TaskStatus.READY
+            if all(mm[pid].status == MilestoneStatus.DONE for pid in m.prerequisites if pid in mm):
+                m.status = MilestoneStatus.READY
                 ready.append(m)
         return ready
 
     def validate_dag(self) -> list[str]:
-        """Validate DAG consistency. Returns list of errors (empty = valid).
-        
-        Checks:
-        1. All referenced milestone IDs exist
-        2. prerequisites and next are mirrors of each other
-        3. No cycles (topological sort)
-        """
+        """Validate DAG consistency. Returns list of errors (empty = valid)."""
         errors = []
         mm = self._milestone_map()
         valid_ids = set(mm.keys())
 
-        # Check references exist
         for m in self.milestones:
             for pid in m.prerequisites:
                 if pid not in valid_ids:
@@ -184,7 +162,6 @@ class ExecutionPlan(BaseModel):
                 if nid not in valid_ids:
                     errors.append(f"Milestone '{m.id}' has unknown next '{nid}'")
 
-        # Check mirror consistency: if A.next has B, then B.prerequisites has A
         for m in self.milestones:
             for nid in m.next:
                 if nid in mm and m.id not in mm[nid].prerequisites:
@@ -193,7 +170,6 @@ class ExecutionPlan(BaseModel):
                 if pid in mm and m.id not in mm[pid].next:
                     errors.append(f"Milestone '{m.id}' lists '{pid}' in prerequisites, but '{pid}' doesn't list '{m.id}' in next")
 
-        # Check no cycles (Kahn's algorithm)
         in_degree = {m.id: len(m.prerequisites) for m in self.milestones}
         queue = [mid for mid, deg in in_degree.items() if deg == 0]
         visited = 0
@@ -211,10 +187,6 @@ class ExecutionPlan(BaseModel):
         return errors
 
     def save_milestones(self, output_dir: str = "./output") -> list[str]:
-        """Save each milestone as a separate JSON file.
-        
-        Returns list of file paths created.
-        """
         from pathlib import Path
         out = Path(output_dir)
         out.mkdir(parents=True, exist_ok=True)

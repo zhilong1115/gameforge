@@ -133,17 +133,25 @@ All data flows through Pydantic models for type safety and serialization.
 
 ```
 ExecutionPlan
-├── GameConfig          — game metadata (name, framework, platforms, art style)
-└── Milestone[]         — DAG of development milestones
-    ├── prerequisites[] — milestone IDs that must complete first
-    ├── next[]          — milestone IDs unlocked on completion
-    ├── status          — PENDING → READY → IN_PROGRESS → DONE / FAILED
-    ├── Task[]          — work items within the milestone
-    │   ├── depends_on[]    — task-level dependencies
-    │   ├── AgentConfig[]   — which agents participate
-    │   └── status          — same lifecycle as milestone
+├── GameConfig              — game metadata (name, framework, platforms, art style)
+├── llm_config_path         — path to LLM API credentials
+└── Milestone[]             — DAG of development milestones
+    ├── prerequisites[]     — milestone IDs that must complete first
+    ├── next[]              — milestone IDs unlocked on completion
+    ├── status              — PENDING → READY → IN_PROGRESS → DONE / FAILED
+    ├── agents[]            — AutoGen agents in this GroupChat
+    │   ├── role            — designer / critic / coder / balancer
+    │   ├── model           — references key in llm_config.json
+    │   ├── temperature     — LLM temperature
+    │   └── system_prompt   — task-specific instructions
+    ├── speaker_order[]     — agent speaking sequence (e.g. [designer, critic, coder, critic])
+    ├── manager_model       — LLM config key for GroupChatManager
+    ├── max_rounds          — max conversation rounds
+    ├── max_iterations      — max retry cycles (design→code→test)
     └── PlaytestCriteria[]  — measurable pass/fail conditions
 ```
+
+Each Milestone is the **atomic execution unit** — there is no Task layer. If a milestone feels too big, break it into smaller milestones in the DAG instead of nesting tasks. This keeps the model flat and maps 1:1 to AutoGen GroupChat sessions.
 
 #### 3.1.2 Milestone Lifecycle
 
@@ -174,7 +182,7 @@ The system validates the milestone DAG at plan creation:
 
 #### 3.1.4 Milestone Config (JSON)
 
-Each milestone is saved as a self-contained JSON file that serves as both documentation and AutoGen GroupChat configuration. Example `milestone_1_core_game_loop.json`:
+Each milestone is saved as a self-contained JSON file that doubles as an AutoGen GroupChat configuration. Example `milestone_1_core_game_loop.json`:
 
 ```json
 {
@@ -184,45 +192,31 @@ Each milestone is saved as a self-contained JSON file that serves as both docume
   "prerequisites": [],
   "next": ["2", "3"],
   "programming_language": "typescript",
-  "status": "pending",
-  "tasks": [
+  "agents": [
     {
-      "id": "1.1",
-      "title": "Data structures and types",
-      "description": "Define all core data types: tiles, hands, melds, scoring",
-      "depends_on": [],
-      "agents": [
-        {
-          "role": "designer",
-          "model": "default",
-          "temperature": 0.7,
-          "max_rounds": 15,
-          "system_prompt": "Design the tile and hand data structures for a mahjong game..."
-        },
-        {
-          "role": "critic",
-          "model": "default",
-          "temperature": 0.3,
-          "max_rounds": 10,
-          "system_prompt": "Review the proposed data structures for completeness..."
-        }
-      ],
-      "max_iterations": 5,
-      "status": "pending"
+      "role": "designer",
+      "model": "default",
+      "temperature": 0.7,
+      "system_prompt": "Design data structures, game rules, and core mechanics for a mahjong game"
     },
     {
-      "id": "1.2",
-      "title": "Core game logic",
-      "description": "Implement the main game loop: draw, discard, meld, win detection",
-      "depends_on": ["1.1"],
-      "agents": [
-        { "role": "coder", "model": "default", "temperature": 0.3, "max_rounds": 20 },
-        { "role": "critic", "model": "fast", "temperature": 0.3, "max_rounds": 10 }
-      ],
-      "max_iterations": 5,
-      "status": "pending"
+      "role": "coder",
+      "model": "default",
+      "temperature": 0.3,
+      "system_prompt": "Implement the game logic from design specs in TypeScript"
+    },
+    {
+      "role": "critic",
+      "model": "fast",
+      "temperature": 0.3,
+      "system_prompt": "Review designs and code for correctness, edge cases, and completeness"
     }
   ],
+  "speaker_order": ["designer", "critic", "coder", "critic"],
+  "manager_model": "default",
+  "max_rounds": 20,
+  "max_iterations": 5,
+  "iterations": 0,
   "playtest_criteria": [
     {
       "description": "Can complete a basic game round from deal to scoring",
@@ -231,6 +225,7 @@ Each milestone is saved as a self-contained JSON file that serves as both docume
       "operator": ">="
     }
   ],
+  "status": "pending",
   "human_approved": null,
   "human_feedback": ""
 }
@@ -241,11 +236,12 @@ Key fields explained:
 | Field | Purpose |
 |-------|---------|
 | `prerequisites` / `next` | DAG edges — defines execution order and parallelism |
-| `tasks[].depends_on` | Intra-milestone task dependencies (task 1.2 waits for 1.1) |
-| `tasks[].agents` | Which agents participate; each references an LLM config key via `model` |
-| `tasks[].agents[].system_prompt` | Task-specific instructions injected into the agent's prompt |
-| `tasks[].agents[].max_rounds` | Limits AutoGen conversation length to control cost |
-| `tasks[].max_iterations` | Max design→code→test cycles before escalating to human |
+| `agents` | AutoGen agents in this GroupChat; each references an LLM config key via `model` |
+| `agents[].system_prompt` | Milestone-specific instructions injected into the agent's prompt |
+| `speaker_order` | Defines the AutoGen conversation flow (who speaks in what order) |
+| `manager_model` | LLM config key for the AutoGen GroupChatManager (decides speaker transitions) |
+| `max_rounds` | Max conversation rounds in the GroupChat — controls cost |
+| `max_iterations` | Max design→code→test retry cycles before escalating to human |
 | `playtest_criteria` | Measurable conditions that must pass for the milestone to complete |
 | `human_approved` | `null` = not reviewed, `true` = approved, `false` = rejected |
 | `human_feedback` | Human's notes when rejecting — fed back to agents on retry |
@@ -290,8 +286,8 @@ class GameForgeState(TypedDict):
     game_name: str
     
     # Plan — milestone status tracked on Milestone.status directly
-    execution_plan: dict       # Serialized ExecutionPlan
-    current_task_id: str | None
+    execution_plan: dict            # Serialized ExecutionPlan
+    current_milestone_id: str | None  # ID of milestone being executed
     
     # Phase outputs
     design_spec: dict | None   # Current design proposal

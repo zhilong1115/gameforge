@@ -2,7 +2,7 @@
 
 from gameforge.producer.normalizer import analyze_gdd, normalize_gdd
 from gameforge.producer.producer import produce_from_template
-from gameforge.models.plan import ExecutionPlan, GameConfig
+from gameforge.models.plan import AgentRole, ExecutionPlan
 
 
 HU_GDD_PATH = "examples/hu/game_design.md"
@@ -12,7 +12,7 @@ def test_analyze_complete_gdd():
     with open(HU_GDD_PATH) as f:
         gdd = f.read()
     analysis = analyze_gdd(gdd)
-    assert analysis.is_valid  # HU GDD has all required sections
+    assert analysis.is_valid
     assert len(analysis.missing_required) == 0
 
 
@@ -34,7 +34,6 @@ def test_normalize_complete_gdd_unchanged():
     with open(HU_GDD_PATH) as f:
         gdd = f.read()
     analysis = analyze_gdd(gdd)
-    # HU has all required, only missing art_style and agent_config
     assert analysis.is_valid
 
 
@@ -48,21 +47,31 @@ def test_produce_from_template():
     assert plan.milestones[0].title == "Core Game Loop"
 
 
-def test_produce_from_template_tasks():
-    plan = produce_from_template(HU_GDD_PATH)
-    m1 = plan.milestones[0]
-    assert len(m1.tasks) == 3
-    assert m1.tasks[0].id == "1.1"
-    assert m1.tasks[1].depends_on == ["1.1"]
-    assert m1.tasks[2].depends_on == ["1.1", "1.2"]
-
-
 def test_produce_from_template_agents():
     plan = produce_from_template(HU_GDD_PATH)
-    task = plan.milestones[0].tasks[0]  # 1.1: Data structures
-    roles = [a.role.value for a in task.agents]
-    assert "designer" in roles
-    assert "critic" in roles
+    m1 = plan.milestones[0]
+    roles = [a.role for a in m1.agents]
+    assert AgentRole.DESIGNER in roles
+    assert AgentRole.CODER in roles
+    assert AgentRole.CRITIC in roles
+
+
+def test_produce_from_template_speaker_order():
+    plan = produce_from_template(HU_GDD_PATH)
+    m1 = plan.milestones[0]
+    assert len(m1.speaker_order) > 0
+    # Should start with designer and end with critic
+    assert m1.speaker_order[0] == AgentRole.DESIGNER
+    assert m1.speaker_order[-1] == AgentRole.CRITIC
+
+
+def test_produce_from_template_dag():
+    plan = produce_from_template(HU_GDD_PATH)
+    assert plan.milestones[0].prerequisites == []
+    assert plan.milestones[0].next == ["2"]
+    assert plan.milestones[1].prerequisites == ["1"]
+    errors = plan.validate_dag()
+    assert errors == [], f"DAG errors: {errors}"
 
 
 def test_produce_from_template_playtest():
@@ -81,3 +90,4 @@ def test_produce_saves_json(tmp_path):
     assert data["game"]["game_name"] == "HU"
     restored = ExecutionPlan.model_validate(data)
     assert len(restored.milestones) == 3
+    assert len(restored.milestones[0].agents) > 0
