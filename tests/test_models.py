@@ -146,15 +146,14 @@ def test_execution_plan():
             target_platforms=["web"],
         ),
         milestones=[
-            Milestone(id="1", title="Core Round"),
-            Milestone(id="2", title="Deck Building"),
+            Milestone(id="1", title="Core Round", next=["2"]),
+            Milestone(id="2", title="Deck Building", prerequisites=["1"]),
         ],
     )
     assert plan.game.game_name == "HU"
-    assert plan.current_milestone_idx == 0
-    assert plan.current_milestone is not None
-    assert plan.current_milestone.title == "Core Round"
     assert not plan.is_complete
+    assert len(plan.ready_milestones()) == 1
+    assert plan.ready_milestones()[0].id == "1"
 
 
 def test_execution_plan_dag_valid():

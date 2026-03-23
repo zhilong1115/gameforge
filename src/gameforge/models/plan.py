@@ -135,13 +135,6 @@ class ExecutionPlan(BaseModel):
 
     # Milestones
     milestones: list[Milestone] = Field(default_factory=list)
-    current_milestone_idx: int = Field(default=0)
-
-    @property
-    def current_milestone(self) -> Milestone | None:
-        if 0 <= self.current_milestone_idx < len(self.milestones):
-            return self.milestones[self.current_milestone_idx]
-        return None
 
     @property
     def is_complete(self) -> bool:

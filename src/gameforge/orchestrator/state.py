@@ -1,21 +1,6 @@
 """LangGraph state schema for GameForge."""
 
-from typing import Annotated, Any
-from operator import add
-
-
-class GameForgeState:
-    """
-    Global state shared across all LangGraph nodes.
-    
-    Using Annotated with reducer functions for list fields
-    so LangGraph can merge state updates correctly.
-    """
-    pass
-
-
-# Use TypedDict for LangGraph compatibility
-from typing import TypedDict
+from typing import Any, TypedDict
 
 
 class GameForgeState(TypedDict):
@@ -27,8 +12,11 @@ class GameForgeState(TypedDict):
 
     # ── Plan ──
     execution_plan: dict[str, Any]  # Serialized ExecutionPlan
-    current_milestone_idx: int
     current_task_id: str | None
+
+    # ── Milestone DAG tracking ──
+    completed_milestones: list[str]  # IDs of milestones that are DONE
+    active_milestones: list[str]  # IDs currently being executed
 
     # ── Design Phase ──
     design_spec: dict[str, Any] | None  # Serialized DesignSpec
